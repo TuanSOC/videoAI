@@ -3,7 +3,7 @@ const view = document.getElementById("view");
 const WPS = { vi: 3.3, en: 2.5 }; // spoken words/second, mirrors script/writer.py
 const STATUS = {
   review: "Chờ duyệt", queued: "Đang chờ", running: "Đang xử lý", rendered: "Thiếu metadata",
-  done: "Hoàn tất", error: "Lỗi", empty: "Trống",
+  done: "Hoàn tất", error: "Lỗi", empty: "Trống", interrupted: "Bị gián đoạn",
 };
 const STEPS = [
   ["script", "Kịch bản"], ["voice", "Giọng đọc"], ["visuals", "Hình ảnh"],
@@ -186,6 +186,10 @@ async function renderDetail(slug, { keepDraft = false } = {}) {
           ${v.has_video ? "Render lại" : "Render video"}</button>
       </div>
     </div>
+    ${job?.status === "interrupted" ? `<div class="banner warn"><div><b>Bị gián đoạn</b> khi đang
+        ${esc(STEPS.find((s) => s[0] === job.current)?.[1] || (job.kind === "render" ? "render" : "viết kịch bản"))}
+        (server đã tắt hoặc khởi động lại). Các bước đã xong sẽ được giữ nguyên.</div>
+        <button class="btn primary sm" id="resume">Tiếp tục</button></div>` : ""}
     ${job?.status === "error" ? `<div class="banner error"><div><b>${job.kind === "script" ? "Không viết được kịch bản" : "Render thất bại"}.</b>
         Sửa nguyên nhân (thường là thiếu API key — xem <a href="#/settings"><u>Cài đặt</u></a>) rồi thử lại.
         <pre>${esc(job.error)}</pre></div></div>` : ""}
@@ -339,6 +343,12 @@ function wireDetail(slug, v) {
     markDirty();
     renderScenes(lang, false, v.job);
     document.getElementById("dirty")?.removeAttribute("hidden");
+  });
+
+  document.getElementById("resume")?.addEventListener("click", async (ev) => {
+    ev.currentTarget.disabled = true;
+    try { await api(`/api/videos/${slug}/resume`, { method: "POST" }); toast("Đang chạy tiếp"); renderDetail(slug); }
+    catch (e) { toast(e.message, "error"); ev.currentTarget.disabled = false; }
   });
 
   document.getElementById("save").addEventListener("click", async () => {

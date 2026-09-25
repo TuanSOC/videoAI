@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from vidgen import config
 from vidgen.config import get_settings
+from vidgen.fsutil import write_atomic
 from vidgen.models import Scene, Script
 from vidgen.web.app import create_app, video_status
 from vidgen.web.jobs import JobQueue, JobStatus
@@ -22,7 +23,7 @@ def env(tmp_path, monkeypatch):
 
     def fake_script(out_dir, settings):
         calls["script"] += 1
-        (out_dir / "script.json").write_text(SCRIPT.model_dump_json(), encoding="utf-8")
+        write_atomic(out_dir / "script.json", SCRIPT.model_dump_json())  # real writers are atomic too
 
     def fake_stages(out_dir, settings, force=None, on_stage=lambda n, st: None):
         calls["render"].append(force)
@@ -158,3 +159,67 @@ def test_static_index_served(env):
     r = client.get("/")
     assert r.status_code == 200 and "vidgen" in r.text
     assert client.get("/app.js").status_code == 200
+
+
+# --- phase: job persistence -----------------------------------------------------------------
+def test_job_persisted_to_disk(env):
+    client, jobs, _, s = env
+    slug = create(client, jobs, auto_render=True)
+    saved = json.loads((s.pipeline.output_dir / slug / "job.json").read_text(encoding="utf-8"))
+    assert saved["status"] == "done" and saved["stages"]["render"].startswith("done")
+    assert saved["options"] == {"then_render": True}
+
+
+def test_restart_marks_running_job_interrupted_and_resume_finishes(env):
+    client, jobs, calls, s = env
+    slug = create(client, jobs)
+    d = s.pipeline.output_dir / slug
+    # simulate a server that died mid-render
+    job = json.loads((d / "job.json").read_text(encoding="utf-8"))
+    job.update(kind="render", status="running", current="visuals", options={"force": "voice"})
+    (d / "job.json").write_text(json.dumps(job), encoding="utf-8")
+
+    from vidgen.web.app import create_app
+    fresh_jobs = JobQueue()
+    stages_seen = []
+
+    def fake_stages(out_dir, settings, force=None, on_stage=lambda n, st: None):
+        stages_seen.append(force)
+        (out_dir / "final.mp4").write_bytes(b"x")
+        return {}
+
+    app2 = TestClient(create_app(settings=lambda: s, stage_runner=fake_stages, jobs=fresh_jobs))
+    v = app2.get(f"/api/videos/{slug}").json()
+    assert v["status"] == "interrupted" and v["job"]["current"] == "visuals"
+    assert app2.post(f"/api/videos/{slug}/resume").status_code == 200
+    fresh_jobs.wait_idle()
+    assert stages_seen == [None]  # resume never re-applies force
+    assert app2.get(f"/api/videos/{slug}").json()["status"] == "rendered"
+    assert app2.post(f"/api/videos/{slug}/resume").status_code == 409  # nothing left to resume
+
+
+def test_interrupted_script_job_resumes_with_its_options(env):
+    client, jobs, calls, s = env
+    slug = create(client, jobs)
+    d = s.pipeline.output_dir / slug
+    (d / "job.json").write_text(json.dumps({"slug": slug, "kind": "script", "status": "queued",
+                                            "options": {"then_render": True}}), encoding="utf-8")
+    from vidgen.web.app import create_app
+    fresh = JobQueue()
+    rendered = []
+    app2 = TestClient(create_app(settings=lambda: s,
+                                 script_runner=lambda out_dir, st: (out_dir / "script.json").write_text(
+                                     SCRIPT.model_dump_json(), encoding="utf-8"),
+                                 stage_runner=lambda *a, **k: rendered.append(1) or {}, jobs=fresh))
+    assert app2.post(f"/api/videos/{slug}/resume").status_code == 200
+    fresh.wait_idle()
+    assert rendered == [1]
+
+
+def test_mark_interrupted_ignores_finished_jobs(tmp_path):
+    from vidgen.web.jobs import load_job, mark_interrupted
+
+    (tmp_path / "job.json").write_text(json.dumps({"slug": "x", "kind": "render", "status": "done"}))
+    assert mark_interrupted(tmp_path) is False and load_job(tmp_path).status == "done"
+    (tmp_path / "job.json").write_text("{broken")
+    assert load_job(tmp_path) is None

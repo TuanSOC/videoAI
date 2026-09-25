@@ -17,7 +17,7 @@ from vidgen import pipeline
 from vidgen.config import SECRET_KEYS, Settings, get_settings, update_env_file
 from vidgen.fsutil import write_atomic
 from vidgen.models import Script
-from vidgen.web.jobs import JobQueue, JobStatus
+from vidgen.web.jobs import JobQueue, JobStatus, load_job, mark_interrupted
 
 STATIC = Path(__file__).parent / "static"
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,80}$")
@@ -39,10 +39,8 @@ class RenderRequest(BaseModel):
 
 
 def video_status(out_dir: Path, job: JobStatus | None) -> str:
-    if job and job.status in ("queued", "running"):
+    if job and job.status in ("queued", "running", "interrupted", "error"):
         return job.status
-    if job and job.status == "error":
-        return "error"
     if not (out_dir / "script.json").exists():
         return "error" if job else "empty"
     if (out_dir / "metadata.json").exists():
@@ -50,6 +48,20 @@ def video_status(out_dir: Path, job: JobStatus | None) -> str:
     if (out_dir / "final.mp4").exists():
         return "rendered"
     return "review"
+
+
+def last_modified(d: Path) -> float:
+    """Newest mtime in a video dir. Files can vanish mid-scan (atomic-write temp files are renamed
+    by the worker while the UI polls), and dot-files are those temps — skip both."""
+    newest = d.stat().st_mtime
+    for p in d.iterdir():
+        if p.name.startswith("."):
+            continue
+        try:
+            newest = max(newest, p.stat().st_mtime)
+        except FileNotFoundError:
+            continue
+    return newest
 
 
 def create_app(settings: Callable[[], Settings] = get_settings,
@@ -63,6 +75,16 @@ def create_app(settings: Callable[[], Settings] = get_settings,
     def root() -> Path:
         s = settings()
         return s.path(s.pipeline.output_dir)
+
+    # a job recorded as queued/running by a previous server process was cut off
+    if root().exists():
+        for d in root().iterdir():
+            if d.is_dir():
+                mark_interrupted(d)
+
+    def job_of(d: Path) -> JobStatus | None:
+        """Live job from this process, else the last one persisted on disk."""
+        return jobs.get(d.name) or load_job(d)
 
     def video_dir(slug: str) -> Path:
         if not SLUG_RE.match(slug):
@@ -78,7 +100,7 @@ def create_app(settings: Callable[[], Settings] = get_settings,
     def summary(d: Path) -> dict:
         state = pipeline.load_state(d)
         script = read_json_model(d / "script.json", Script)
-        job = jobs.get(d.name)
+        job = job_of(d)
         return {
             "slug": d.name,
             "topic": state.get("topic", ""),
@@ -89,7 +111,7 @@ def create_app(settings: Callable[[], Settings] = get_settings,
             "status": video_status(d, job),
             "stage": job.current if job else "",
             "has_video": (d / "final.mp4").exists(),
-            "updated": max((p.stat().st_mtime for p in d.iterdir()), default=d.stat().st_mtime),
+            "updated": last_modified(d),
         }
 
     def enqueue_script(d: Path, then_render: bool) -> None:
@@ -98,15 +120,21 @@ def create_app(settings: Callable[[], Settings] = get_settings,
             s = settings()
             script_runner(d, s)
             job.stages["script"] = "done"
+            job.save()
             if then_render:
                 run_render(job, d, s, None)
-        jobs.submit(d.name, "script", work)
+        jobs.submit(d.name, "script", work, out_dir=d, options={"then_render": then_render})
 
     def run_render(job: JobStatus, d: Path, s: Settings, force: str | None) -> None:
         def on_stage(name: str, status: str) -> None:
             job.stages[name] = status
             job.current = name if status == "run" else job.current
+            job.save()
         stage_runner(d, s, force=force, on_stage=on_stage)
+
+    def submit_render(d: Path, force: str | None) -> JobStatus:
+        return jobs.submit(d.name, "render", lambda job: run_render(job, d, settings(), force),
+                           out_dir=d, options={"force": force})
 
     # --- videos -------------------------------------------------------------------------
     @app.get("/api/videos")
@@ -127,7 +155,7 @@ def create_app(settings: Callable[[], Settings] = get_settings,
     @app.get("/api/videos/{slug}")
     def get_video(slug: str) -> dict:
         d = video_dir(slug)
-        job = jobs.get(slug)
+        job = job_of(d)
         meta_path = d / "metadata.json"
         return {
             **summary(d),
@@ -158,10 +186,26 @@ def create_app(settings: Callable[[], Settings] = get_settings,
         if not (d / "script.json").exists():
             raise HTTPException(409, "no script yet")
         try:
-            job = jobs.submit(slug, "render", lambda job: run_render(job, d, settings(), req.force))
+            job = submit_render(d, req.force)
         except RuntimeError as e:
             raise HTTPException(409, str(e)) from e
         return job.to_dict()
+
+    @app.post("/api/videos/{slug}/resume")
+    def resume(slug: str) -> dict:
+        """Re-submit an interrupted job. Finished stages are skipped by the pipeline itself."""
+        d = video_dir(slug)
+        job = job_of(d)
+        if job is None or job.status != "interrupted":
+            raise HTTPException(409, "nothing to resume")
+        try:
+            if job.kind == "render":
+                submit_render(d, None)  # never re-apply force: that would redo finished stages
+            else:
+                enqueue_script(d, then_render=bool(job.options.get("then_render")))
+        except RuntimeError as e:
+            raise HTTPException(409, str(e)) from e
+        return {"ok": True}
 
     @app.post("/api/videos/{slug}/script/regenerate")
     def regenerate_script(slug: str) -> dict:

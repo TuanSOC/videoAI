@@ -89,6 +89,7 @@ main { max-width: 1320px; margin: 0 auto; padding: 28px 24px 80px; outline: none
 .pill.st-running, .pill.st-queued { color: var(--cyan); background: var(--cyan-soft); }
 .pill.st-running .dot { animation: pulse 1.2s infinite; }
 .pill.st-done, .pill.st-rendered { color: var(--green); background: var(--green-soft); }
+.pill.st-interrupted { color: var(--amber); background: var(--amber-soft); }
 .pill.st-error { color: var(--red); background: var(--red-soft); }
 @keyframes pulse { 50% { opacity: .3; } }
 
@@ -147,6 +148,7 @@ select.input { cursor: pointer; }
 
 .banner { padding: 12px 14px; border-radius: var(--radius-sm); margin-bottom: 16px; display: flex; gap: 12px; align-items: flex-start; }
 .banner.error { background: var(--red-soft); color: #ffb3b3; border: 1px solid rgba(255, 92, 92, .3); }
+.banner.warn { background: var(--amber-soft); color: #ffd98a; border: 1px solid rgba(245, 181, 65, .3); align-items: center; justify-content: space-between; }
 .banner.info { background: var(--cyan-soft); color: #aef0ea; border: 1px solid rgba(58, 209, 198, .25); }
 .banner pre { margin: 4px 0 0; white-space: pre-wrap; font: 12px/1.5 var(--mono); max-height: 160px; overflow: auto; }
 
