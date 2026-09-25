@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from vidgen.config import get_settings
-from vidgen.models import Scene
+from vidgen.models import Asset, Scene
 from vidgen.visuals import selector as sel
 from vidgen.visuals.comfy import ComfyClient, ComfyError, fill_template
 from vidgen.visuals.stock import Candidate, Pexels, Pixabay, pick_file
@@ -216,3 +216,52 @@ def test_comfy_run_reports_execution_error(tmp_path):
     client = ComfyClient("http://c", httpx.Client(transport=httpx.MockTransport(handler)))
     with pytest.raises(ComfyError, match="OOM"):
         client.run(wf, {}, tmp_path / "x", timeout=5)
+
+
+# --- clip swap ---------------------------------------------------------------------------------
+def test_pick_records_ranked_alternates(tmp_path, fake_download):
+    stock = FakeStock(videos={"stormy ocean aerial": [cand("a"), cand("b", dur=2), cand("c", 1920, 1080),
+                                                       cand("d", 1920, 1080), cand("e", 1920, 1080)]})
+    asset = make_selector(tmp_path, [stock]).pick(scene(1), 5)
+    assert asset.uid == "a" and asset.query == "stormy ocean aerial"
+    assert [x.uid for x in asset.alternates] == ["b", "c", "d"]  # next best, capped at 3
+
+
+def test_swap_uses_next_unused_alternate(tmp_path, fake_download):
+    stock = FakeStock(videos={"stormy ocean aerial": [cand("a"), cand("b"), cand("c")]})
+    s = make_selector(tmp_path, [stock])
+    current = s.pick(scene(1), 5)
+    new = s.swap(scene(1), 5, current, used={"a", "b"})  # "b" is already used by another scene
+    assert new.uid == "c" and new.alternates == []
+
+
+def test_swap_with_query_searches_and_never_reuses(tmp_path, fake_download):
+    stock = FakeStock(videos={"stormy ocean aerial": [cand("a")], "lightning storm": [cand("a"), cand("z")]})
+    s = make_selector(tmp_path, [stock])
+    current = s.pick(scene(1), 5)
+    new = s.swap(scene(1), 5, current, used={"a"}, query="lightning storm")
+    assert new.uid == "z" and new.query == "lightning storm"
+
+
+def test_swap_raises_when_nothing_left(tmp_path, fake_download):
+    stock = FakeStock(videos={"stormy ocean aerial": [cand("a")]})
+    s = make_selector(tmp_path, [stock])
+    current = s.pick(scene(1), 5)
+    with pytest.raises(sel.SwapError):
+        s.swap(scene(1), 5, current, used={"a"})
+
+
+def test_metadata_rebuild_refreshes_credits_without_llm():
+    from vidgen.metadata import Metadata, rebuild_description
+    from vidgen.models import Script
+
+    script = Script(title="t", hook="h", lang="vi", format="short", scenes=[scene(1)])
+    old = Metadata(title="T", description="Tóm tắt.\n\nVideo sử dụng giọng đọc AI; một số hình ảnh minh họa được tạo bằng AI."
+                   "\n\nFootage:\n- Pexels by A: u1\n\n#x #shorts",
+                   tags=["x"], hashtags=["#x", "#shorts"], credits=["Pexels by A: u1"],
+                   ai_disclosure="Video sử dụng giọng đọc AI; một số hình ảnh minh họa được tạo bằng AI.",
+                   ai_visuals_used=False)  # older file: no `summary`
+    new_assets = [Asset(scene_id=1, path="p", kind="video", source="pixabay", url="u9", author="Bo")]
+    meta = rebuild_description(old, script, new_assets)
+    assert meta.summary == "Tóm tắt." and meta.credits == ["Pixabay by Bo: u9"]
+    assert "u1" not in meta.description and meta.description.endswith("#x #shorts")

@@ -313,3 +313,79 @@ def test_interrupted_manual_brief_with_file_just_completes(env):
     assert app2.get(f"/api/videos/{slug}").json()["status"] == "interrupted"
     assert app2.post(f"/api/videos/{slug}/resume").status_code == 200
     assert app2.get(f"/api/videos/{slug}").json()["status"] == "brief"
+
+
+# --- phase: length indicator ----------------------------------------------------------------
+def test_length_fields_and_actual_only_while_script_unchanged(env):
+    client, jobs, _, s = env
+    slug = create(client, jobs)
+    d = s.pipeline.output_dir / slug
+    v = client.get(f"/api/videos/{slug}").json()
+    assert v["target_seconds"] == [45, 75] and v["wps"] == 3.3 and v["actual_seconds"] is None
+
+    from vidgen import pipeline
+    from vidgen.models import SceneAudio, Timeline
+    tl = Timeline(scenes=[SceneAudio(scene_id=1, path="a", start=0, duration=52.34, words=[])])
+    (d / "timeline.json").write_text(tl.model_dump_json(), encoding="utf-8")
+    state = pipeline.load_state(d)
+    state["script_hash"] = pipeline._hash(d / "script.json")
+    (d / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    assert client.get(f"/api/videos/{slug}").json()["actual_seconds"] == 52.3
+
+    body = SCRIPT.model_dump()
+    body["scenes"][0]["narration"] = "Đã sửa."
+    client.put(f"/api/videos/{slug}/script", json=body)
+    assert client.get(f"/api/videos/{slug}").json()["actual_seconds"] is None  # stale after edit
+
+
+# --- phase: clip swap -----------------------------------------------------------------------------
+def rendered_video(client, jobs, s):
+    """A video whose voice matches its script and has 2 stock clips with alternates."""
+    from vidgen import pipeline
+    from vidgen.models import Alternate, Asset, SceneAudio, Timeline
+
+    slug = create(client, jobs)
+    d = s.pipeline.output_dir / slug
+    (d / "visuals").mkdir()
+    for i in (1, 2):
+        (d / "visuals" / f"scene_00{i}.mp4").write_bytes(b"x")
+    alt = Alternate(uid="pexels:v9", kind="video", download_url="https://x/9.mp4", page_url="p9", width=1080,
+                    height=1920, duration=9, author="Z", source="pexels", license="L")
+    assets = [Asset(scene_id=i, path=f"visuals/scene_00{i}.mp4", kind="video", source="pexels",
+                    uid=f"pexels:v{i}", query="ocean", url=f"p{i}", alternates=[alt] if i == 1 else [])
+              for i in (1, 2)]
+    (d / "assets.json").write_bytes(pipeline.ASSETS.dump_json(assets))
+    tl = Timeline(scenes=[SceneAudio(scene_id=i, path="a", start=i, duration=2, words=[]) for i in (1, 2)])
+    (d / "timeline.json").write_text(tl.model_dump_json(), encoding="utf-8")
+    state = pipeline.load_state(d)
+    state["script_hash"] = pipeline._hash(d / "script.json")
+    (d / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    (d / "metadata.json").write_text("{}", encoding="utf-8")
+    (d / "final.mp4").write_bytes(b"old render")
+    return slug, d
+
+
+def test_swap_replaces_one_clip_and_drops_only_the_render(env, monkeypatch, tmp_path):
+    client, jobs, _, s = env
+    slug, d = rendered_video(client, jobs, s)
+    assert client.get(f"/api/videos/{slug}").json()["assets"][0]["alternates"] == 1
+
+    from vidgen.visuals import selector as sel
+    cache_file = tmp_path / "9.mp4"
+    cache_file.write_bytes(b"new")
+    monkeypatch.setattr(sel, "download", lambda url, cache, http: cache_file)
+    r = client.post(f"/api/videos/{slug}/scenes/1/swap", json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["url"] == "p9"
+    assert not (d / "final.mp4").exists() and (d / "metadata.json").exists()  # metadata kept
+    assert (d / "visuals" / "scene_002.mp4").read_bytes() == b"x"            # other clip untouched
+    v = client.get(f"/api/videos/{slug}").json()
+    assert v["status"] == "review" and v["assets"][0]["url"] == "p9"
+
+
+def test_swap_needs_rendered_clips_and_known_scene(env):
+    client, jobs, _, s = env
+    slug = create(client, jobs)
+    assert client.post(f"/api/videos/{slug}/scenes/1/swap", json={}).status_code == 409
+    slug2, _ = rendered_video(client, jobs, s)
+    assert client.post(f"/api/videos/{slug2}/scenes/99/swap", json={}).status_code == 404

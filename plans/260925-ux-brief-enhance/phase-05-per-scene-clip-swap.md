@@ -1,10 +1,11 @@
 ---
 phase: 5
-title: "Per-Scene Clip Swap"
-status: pending
+title: Per-Scene Clip Swap
+status: completed
 priority: P2
-effort: "0.75d"
-dependencies: [1]
+effort: 0.75d
+dependencies:
+  - 1
 ---
 
 # Phase 5: Per-Scene Clip Swap

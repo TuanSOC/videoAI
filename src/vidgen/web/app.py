@@ -1,5 +1,6 @@
 """Local web UI: JSON API over the existing pipeline + static single-page frontend. Binds to 127.0.0.1 only."""
 
+import hashlib
 import json
 import re
 import shutil
@@ -16,7 +17,8 @@ from pydantic import BaseModel, Field, ValidationError
 from vidgen import pipeline
 from vidgen.config import SECRET_KEYS, Settings, get_settings, update_env_file
 from vidgen.fsutil import write_atomic
-from vidgen.models import Script
+from vidgen.models import Asset, Script
+from vidgen.script.writer import WORDS_PER_SECOND
 from vidgen.web.jobs import JobQueue, JobStatus, load_job, mark_interrupted
 
 STATIC = Path(__file__).parent / "static"
@@ -52,6 +54,10 @@ class ChooseAngle(BaseModel):
     excluded_urls: list[str] = []
 
 
+class SwapRequest(BaseModel):
+    query: str | None = Field(default=None, max_length=100)  # empty → next saved alternate
+
+
 class RenderRequest(BaseModel):
     force: Literal["voice", "visuals", "render", "metadata"] | None = None
 
@@ -63,11 +69,9 @@ def video_status(out_dir: Path, job: JobStatus | None) -> str:
         if (out_dir / pipeline.BRIEF_FILE).exists():
             return "brief"  # waiting for the user to pick an angle
         return "error" if job else "empty"
-    if (out_dir / "metadata.json").exists():
-        return "done"
-    if (out_dir / "final.mp4").exists():
-        return "rendered"
-    return "review"
+    if not (out_dir / "final.mp4").exists():
+        return "review"  # includes "clip swapped, needs re-render" (metadata.json may remain)
+    return "done" if (out_dir / "metadata.json").exists() else "rendered"
 
 
 def last_modified(d: Path) -> float:
@@ -121,6 +125,15 @@ def create_app(settings: Callable[[], Settings] = get_settings,
 
     def read_json_model(path: Path, model):
         return model.model_validate_json(path.read_text(encoding="utf-8")) if path.exists() else None
+
+    def read_assets(d: Path) -> list[Asset] | None:
+        p = d / "assets.json"
+        return pipeline.ASSETS.validate_json(p.read_text(encoding="utf-8")) if p.exists() else None
+
+    def asset_view(a: Asset) -> dict:
+        return {"scene_id": a.scene_id, "kind": a.kind, "source": a.source, "author": a.author,
+                "url": a.url, "query": a.query, "has_file": bool(a.path),
+                "alternates": len(a.alternates), "key": hashlib.sha1(f"{a.path}|{a.uid}".encode()).hexdigest()[:10]}
 
     def summary(d: Path) -> dict:
         state = pipeline.load_state(d)
@@ -226,14 +239,22 @@ def create_app(settings: Callable[[], Settings] = get_settings,
                 for src in a["sources"]:
                     src["chars"] = len(src["text"])
                     src["text"] = src["text"][:SOURCE_PREVIEW_CHARS]
+        info = summary(d)
         return {
-            **summary(d),
+            **info,
             "script": read_json_model(d / "script.json", Script),
             "brief": brief_view if brief is not None else None,
+            # length indicator: estimate = words / wps in the UI, target range per format, real length once voiced
+            "target_seconds": list(settings().preset(info["format"]).target_seconds),
+            "wps": WORDS_PER_SECOND[info["lang"]],
+            "actual_seconds": pipeline.actual_duration(d),
             "metadata": json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else None,
             "timings": pipeline.load_state(d).get("timings", {}),
             "job": job.to_dict() if job else None,
             "artifacts": {st.name: (d / st.artifact).exists() for st in pipeline.STAGES},
+            # per-scene clips, only while they still match the script (after an edit they'll be re-picked)
+            "assets": ([asset_view(a) for a in read_assets(d) or []]
+                       if pipeline.actual_duration(d) is not None else None),
         }
 
     @app.post("/api/videos/{slug}/brief")
@@ -309,6 +330,24 @@ def create_app(settings: Callable[[], Settings] = get_settings,
             raise HTTPException(409, str(e)) from e
         return {"ok": True}
 
+    @app.post("/api/videos/{slug}/scenes/{scene_id}/swap")
+    def swap(slug: str, scene_id: int, req: SwapRequest) -> dict:
+        """Replace one scene's clip; only the final render is dropped (other clips, voice, metadata stay)."""
+        from vidgen.visuals.selector import SwapError
+
+        d = video_dir(slug)
+        if jobs.busy(slug):
+            raise HTTPException(409, "a job is running for this video")
+        if not (d / "assets.json").exists() or pipeline.actual_duration(d) is None:
+            raise HTTPException(409, "render the video first (clips exist only after the visuals step)")
+        try:
+            asset = pipeline.swap_clip(d, settings(), scene_id, (req.query or "").strip() or None)
+        except KeyError as e:
+            raise HTTPException(404, str(e)) from e
+        except SwapError as e:
+            raise HTTPException(422, str(e)) from e
+        return asset_view(asset)
+
     @app.delete("/api/videos/{slug}")
     def delete_video(slug: str) -> dict:
         d = video_dir(slug)
@@ -336,6 +375,24 @@ def create_app(settings: Callable[[], Settings] = get_settings,
         if not thumb.exists() or thumb.stat().st_mtime < video.stat().st_mtime:
             ffmpeg.run(["-ss", "1", "-i", str(video), "-frames:v", "1", "-vf", "scale=480:-2", str(thumb)])
         return FileResponse(thumb, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/media/{slug}/scenes/{scene_id}.jpg")
+    def media_scene_thumb(slug: str, scene_id: int) -> FileResponse:
+        """Small frame of a scene's current clip. Named after the clip (not mtime-checked): swapped files
+        are hard links to the download cache, so their mtime can be older than an existing thumbnail."""
+        from vidgen import ffmpeg
+
+        d = video_dir(slug)
+        asset = next((a for a in (read_assets(d) or []) if a.scene_id == scene_id), None)
+        if asset is None or not asset.path or not (d / asset.path).exists():
+            raise HTTPException(404)
+        key = hashlib.sha1(f"{asset.path}|{asset.uid}".encode()).hexdigest()[:10]
+        thumb = d / "thumbs" / f"scene_{scene_id:03d}_{key}.jpg"
+        if not thumb.exists():
+            thumb.parent.mkdir(exist_ok=True)
+            seek = ["-ss", "0.5"] if asset.kind == "video" else []
+            ffmpeg.run([*seek, "-i", str(d / asset.path), "-frames:v", "1", "-vf", "scale=240:-2", str(thumb)])
+        return FileResponse(thumb, media_type="image/jpeg")
 
     # --- settings ---------------------------------------------------------------------------
     @app.get("/api/doctor")

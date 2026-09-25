@@ -15,11 +15,26 @@ from pathlib import Path
 import httpx
 
 from vidgen.config import FormatPreset, Settings
-from vidgen.models import Asset, Scene, Script, Timeline
+from vidgen.models import Alternate, Asset, Scene, Script, Timeline
 from vidgen.visuals.stock import Candidate, Pexels, Pixabay, StockClient, download
 
 log = logging.getLogger(__name__)
 MIN_SHORT_SIDE = 720
+
+
+MAX_ALTERNATES = 3
+
+
+class SwapError(RuntimeError):
+    pass
+
+
+def _alternate(c: Candidate | Alternate) -> Alternate:
+    if isinstance(c, Alternate):
+        return c
+    return Alternate(uid=c.uid, kind=c.kind, download_url=c.download_url, page_url=c.page_url,
+                     width=c.width, height=c.height, duration=c.duration, author=c.author,
+                     source=c.source, license=c.license)
 
 
 def score(c: Candidate, orientation: str, scene_seconds: float) -> int:
@@ -97,8 +112,8 @@ class Selector:
         return Asset(scene_id=scene.id, path=f"visuals/{path.name}", kind="video" if video else "image",
                      source="wan" if video else "flux", license="AI-generated")
 
-    def _stock(self, scene: Scene, seconds: float, kind: str) -> Asset | None:
-        for query in fallback_queries(scene.visual_query):
+    def _stock(self, scene: Scene, seconds: float, kind: str, query_text: str | None = None) -> Asset | None:
+        for query in fallback_queries(query_text or scene.visual_query):
             candidates: list[Candidate] = []
             for client in self.clients:
                 try:
@@ -106,22 +121,58 @@ class Selector:
                         else client.photos(query, self.orientation)
                 except httpx.HTTPError as e:
                     log.warning("%s search failed for %r: %s", client.source, query, e)
-            fresh = [c for c in candidates if c.uid not in self.used]
-            if not fresh:
-                continue
-            best = max(fresh, key=lambda c: score(c, self.orientation, seconds))
-            try:
-                cached = download(best.download_url, self.cache_dir, self.http)
-            except httpx.HTTPError as e:
-                log.warning("download failed %s: %s", best.download_url, e)
-                self.used.add(best.uid)
-                continue
-            self.used.add(best.uid)
-            dest = self.visuals_dir / f"scene_{scene.id:03d}{cached.suffix}"
-            _link_or_copy(cached, dest)
-            return Asset(scene_id=scene.id, path=f"visuals/{dest.name}", kind=kind, source=best.source,
-                         url=best.page_url, author=best.author, license=best.license)
+            ranked = sorted((c for c in candidates if c.uid not in self.used),
+                            key=lambda c: score(c, self.orientation, seconds), reverse=True)
+            while ranked:
+                best, ranked = ranked[0], ranked[1:]
+                asset = self._use(scene, best, query, ranked[:MAX_ALTERNATES])
+                if asset:
+                    return asset
         return None
+
+    def _use(self, scene: Scene, c: Candidate | Alternate, query: str,
+             alternates: list[Candidate | Alternate]) -> Asset | None:
+        """Download a candidate into visuals/scene_NNN.ext; keep the next-best ones for later swaps."""
+        self.used.add(c.uid)
+        try:
+            cached = download(c.download_url, self.cache_dir, self.http)
+        except httpx.HTTPError as e:
+            log.warning("download failed %s: %s", c.download_url, e)
+            return None
+        dest = self.visuals_dir / f"scene_{scene.id:03d}{cached.suffix}"
+        _link_or_copy(cached, dest)
+        return Asset(scene_id=scene.id, path=f"visuals/{dest.name}", kind=c.kind, source=c.source,
+                     url=c.page_url, author=c.author, license=c.license, uid=c.uid, query=query,
+                     alternates=[_alternate(a) for a in alternates])
+
+    def swap(self, scene: Scene, seconds: float, current: Asset, used: set[str],
+             query: str | None = None) -> Asset:
+        """Another clip for one scene, never one already used anywhere in the video.
+        No query: next saved alternate, else a fresh search on the scene's query. Query: search it."""
+        self.visuals_dir.mkdir(parents=True, exist_ok=True)
+        self.used = set(used) | ({current.uid} if current.uid else set())
+        if not query:
+            pending = [a for a in current.alternates if a.uid not in self.used]
+            while pending:
+                alt, pending = pending[0], pending[1:]
+                asset = self._use(scene, alt, current.query or scene.visual_query, pending)
+                if asset:
+                    return asset
+        for kind in ("video", "image"):
+            asset = self._stock(scene, seconds, kind, query or current.query or scene.visual_query)
+            if asset:
+                return asset
+        raise SwapError("Không tìm được clip khác — thử từ khóa khác")
+
+
+def stock_clients(s: Settings) -> list[StockClient]:
+    cache = s.path(s.pipeline.cache_dir)
+    clients: list[StockClient] = []
+    if s.secrets.pexels_api_key:
+        clients.append(Pexels(s.secrets.pexels_api_key, cache))
+    if s.secrets.pixabay_api_key:
+        clients.append(Pixabay(s.secrets.pixabay_api_key, cache))
+    return clients
 
 
 def build_selector(script: Script, preset: FormatPreset, out_dir: Path, s: Settings) -> Selector:
@@ -129,11 +180,7 @@ def build_selector(script: Script, preset: FormatPreset, out_dir: Path, s: Setti
     from vidgen.visuals.comfy import ComfyClient
 
     cache = s.path(s.pipeline.cache_dir)
-    clients: list[StockClient] = []
-    if s.secrets.pexels_api_key:
-        clients.append(Pexels(s.secrets.pexels_api_key, cache))
-    if s.secrets.pixabay_api_key:
-        clients.append(Pixabay(s.secrets.pixabay_api_key, cache))
+    clients = stock_clients(s)
     comfy = ComfyClient(s.secrets.comfyui_url)
     ai = AIGenerator(comfy, s, script.format) if comfy.available() else None
     if not clients and ai is None:

@@ -1,10 +1,11 @@
 ---
 phase: 4
-title: "Length Indicator"
-status: pending
+title: Length Indicator
+status: completed
 priority: P2
-effort: "0.25d"
-dependencies: [3]
+effort: 0.25d
+dependencies:
+  - 3
 ---
 
 # Phase 4: Length Indicator

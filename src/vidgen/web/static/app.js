@@ -1,6 +1,5 @@
 // vidgen studio — vanilla SPA: hash router, three views, polling while jobs run.
 const view = document.getElementById("view");
-const WPS = { vi: 3.3, en: 2.5 }; // spoken words/second, mirrors script/writer.py
 const STATUS = {
   brief: "Chọn góc", review: "Chờ duyệt", queued: "Đang chờ", running: "Đang xử lý",
   rendered: "Thiếu metadata", done: "Hoàn tất", error: "Lỗi", empty: "Trống", interrupted: "Bị gián đoạn",
@@ -163,6 +162,49 @@ function videoCard(v) {
 let draft = null;   // working copy of script being edited
 let dirty = false;
 let briefMode = null; // slug whose angle cards are open again via "Chọn góc khác"
+let lengthCtx = { target: [45, 75], wps: 3.3, actual: null }; // from the API, for the length bar
+let clipCtx = { slug: "", bySceneId: new Map() }; // current clip per scene (only once visuals exist)
+
+function clipHtml(s) {
+  const a = clipCtx.bySceneId.get(s.id);
+  if (!a) return "";
+  const thumb = a.has_file
+    ? `<img class="clip-thumb" src="/media/${clipCtx.slug}/scenes/${s.id}.jpg?k=${a.key}" alt="" loading="lazy">`
+    : `<div class="clip-thumb empty-thumb">màu</div>`;
+  const src = a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.source)}${a.author ? ` · ${esc(a.author)}` : ""}</a>`
+    : esc(a.source);
+  return `
+    <div class="clip">${thumb}
+      <div class="clip-body">
+        <div class="clip-info">${src}${a.alternates ? ` · ${a.alternates} clip dự phòng` : ""}</div>
+        <div class="clip-actions">
+          <input class="input sm" data-swapq="${s.id}" placeholder="từ khóa khác (tiếng Anh, tùy chọn)" maxlength="100">
+          <button class="btn sm" data-swap="${s.id}">Đổi clip</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function lengthBar(totalWords) {
+  const [lo, hi] = lengthCtx.target;
+  const est = totalWords / lengthCtx.wps;
+  const shown = !dirty && lengthCtx.actual != null ? lengthCtx.actual : est;
+  const scale = hi * 1.3;
+  const pct = (x) => Math.min(100, (x / scale) * 100);
+  const ok = shown >= lo && shown <= hi;
+  const hint = shown < lo ? ` — ngắn, cần thêm ~${Math.ceil((lo - shown) * lengthCtx.wps)} từ`
+    : shown > hi ? ` — dài, bớt ~${Math.ceil((shown - hi) * lengthCtx.wps)} từ` : "";
+  const label = !dirty && lengthCtx.actual != null
+    ? `Thực tế <b>${fmtSec(lengthCtx.actual)}</b>` : `Ước tính <b>${fmtSec(est)}</b>`;
+  return `
+    <div class="lenbar ${ok ? "ok" : "warn"}" id="lenbar">
+      <div class="lenbar-track">
+        <div class="lenbar-range" style="left:${pct(lo)}%;width:${pct(hi) - pct(lo)}%"></div>
+        <div class="lenbar-fill" style="width:${pct(shown)}%"></div>
+      </div>
+      <div class="lenbar-label">${label} · mục tiêu ${fmtSec(lo)}–${fmtSec(hi)}${hint}</div>
+    </div>`;
+}
 
 async function renderDetail(slug, { keepDraft = false } = {}) {
   const v = await api(`/api/videos/${slug}`);
@@ -174,6 +216,9 @@ async function renderDetail(slug, { keepDraft = false } = {}) {
   }
   const lang = v.script?.lang || v.lang;
   const job = v.job;
+  lengthCtx = { target: v.target_seconds, wps: v.wps, actual: v.actual_seconds };
+  clipCtx = { slug, bySceneId: new Map((v.assets || []).map((a) => [a.scene_id, a])) };
+  const needsRerender = v.status === "review" && v.assets && v.metadata && !v.has_video;
   const showBrief = !!v.brief && !active && (!v.script || briefMode === slug);
   const jobLabel = { brief: "Không tạo được góc khai thác", script: "Không viết được kịch bản" }[job?.kind] || "Render thất bại";
 
@@ -204,7 +249,8 @@ async function renderDetail(slug, { keepDraft = false } = {}) {
         Sửa nguyên nhân (thường là thiếu API key — xem <a href="#/settings"><u>Cài đặt</u></a>) rồi thử lại.
         <pre>${esc(job.error)}</pre></div></div>` : ""}
     ${showBrief ? `<div class="banner info">Chọn một góc khai thác. Có thể sửa tiêu đề, câu mở đầu, ý chính và bỏ tick nguồn không đúng chủ đề — kịch bản chỉ dùng dữ kiện từ nguồn được tick.</div>` : ""}
-    ${v.status === "review" && !active && !showBrief ? `<div class="banner info">Kịch bản sẵn sàng. Sửa lời đọc và từ khóa hình nếu cần, rồi bấm <b>Render video</b>.</div>` : ""}
+    ${needsRerender && !active ? `<div class="banner info">Đã đổi clip. Bấm <b>Render video</b> để dựng lại — chỉ ghép lại video (~20-40s), giọng đọc và các clip khác giữ nguyên.</div>`
+      : v.status === "review" && !active && !showBrief ? `<div class="banner info">Kịch bản sẵn sàng. Sửa lời đọc và từ khóa hình nếu cần, rồi bấm <b>Render video</b>.</div>` : ""}
     <div class="layout">
       <section id="scenes"></section>
       <aside class="side">
@@ -331,10 +377,10 @@ function renderScenes(lang, active, job) {
   let lastChapter = null;
   box.innerHTML = `
     <div class="scenes-head">
-      <div class="stats"><span><b>${draft.scenes.length}</b> cảnh</span><span><b>${total}</b> từ</span>
-        <span>≈ <b>${fmtSec(total / WPS[lang])}</b></span></div>
+      <div class="stats"><span><b>${draft.scenes.length}</b> cảnh</span><span><b id="total-words">${total}</b> từ</span></div>
       <span class="dirty" id="dirty" ${dirty ? "" : "hidden"}>● Chưa lưu</span>
     </div>
+    ${lengthBar(total)}
     ${draft.sources?.length
       ? `<div class="sources">Dữ kiện lấy từ: ${draft.sources.map((s) =>
           `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>`).join(" · ")}
@@ -355,7 +401,7 @@ function sceneHtml(s, i, lang, active) {
     <div class="card scene" data-i="${i}">
       <div class="scene-top">
         <span class="scene-num">#${i + 1}</span>
-        <span class="scene-info">${w} từ · ≈ ${(w / WPS[lang]).toFixed(1)}s</span>
+        <span class="scene-info">${w} từ · ≈ ${(w / lengthCtx.wps).toFixed(1)}s</span>
         <div class="scene-tools">
           <button class="btn ghost icon sm" data-act="up" title="Lên" ${dis || (i === 0 ? "disabled" : "")}>↑</button>
           <button class="btn ghost icon sm" data-act="down" title="Xuống" ${dis || (i === draft.scenes.length - 1 ? "disabled" : "")}>↓</button>
@@ -371,12 +417,37 @@ function sceneHtml(s, i, lang, active) {
         </select>
       </div>
       ${s.visual_type !== "stock" ? `<textarea class="input ai-prompt" data-f="ai_prompt" rows="2" placeholder="Prompt AI (tiếng Anh, mô tả chân thực)" aria-label="Prompt AI" ${dis}>${esc(s.ai_prompt)}</textarea>` : ""}
+      ${active ? "" : clipHtml(s)}
     </div>`;
+}
+
+async function swapClip(slug, sceneId, btn) {
+  const q = document.querySelector(`input[data-swapq="${sceneId}"]`)?.value.trim();
+  btn.disabled = true;
+  btn.textContent = "Đang tìm…";
+  try {
+    const a = await api(`/api/videos/${slug}/scenes/${sceneId}/swap`, { method: "POST", body: q ? { query: q } : {} });
+    toast(`Đã đổi clip cảnh ${sceneId} (${a.source}). Bấm Render video để dựng lại.`);
+    renderDetail(slug, { keepDraft: true });
+  } catch (e) {
+    toast(e.message, "error");
+    btn.disabled = false;
+    btn.textContent = "Đổi clip";
+  }
 }
 
 function markDirty() {
   dirty = true;
   document.getElementById("dirty")?.removeAttribute("hidden");
+  refreshLength();
+}
+
+function refreshLength() {
+  const total = draft.scenes.reduce((n, s) => n + words(s.narration), 0);
+  const tw = document.getElementById("total-words");
+  if (tw) tw.textContent = total;
+  document.getElementById("lenbar")?.replaceWith(
+    Object.assign(document.createElement("div"), { innerHTML: lengthBar(total) }).firstElementChild);
 }
 
 async function saveDraft(slug) {
@@ -397,7 +468,7 @@ function wireDetail(slug, v) {
     markDirty();
     if (f === "narration") {
       const w = words(ev.target.value);
-      card.querySelector(".scene-info").textContent = `${w} từ · ≈ ${(w / WPS[lang]).toFixed(1)}s`;
+      card.querySelector(".scene-info").textContent = `${w} từ · ≈ ${(w / lengthCtx.wps).toFixed(1)}s`;
     }
   });
   box.addEventListener("change", (ev) => {
@@ -406,6 +477,7 @@ function wireDetail(slug, v) {
   box.addEventListener("click", (ev) => {
     const btn = ev.target.closest("button");
     if (!btn) return;
+    if (btn.dataset.swap) return swapClip(slug, +btn.dataset.swap, btn); // not a script edit
     if (btn.id === "add-scene") {
       draft.scenes.push({ id: 0, narration: "", visual_query: "", visual_type: "stock", ai_prompt: "", chapter: draft.scenes.at(-1)?.chapter ?? null });
     } else if (btn.dataset.act) {

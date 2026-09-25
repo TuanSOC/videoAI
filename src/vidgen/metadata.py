@@ -30,6 +30,7 @@ class Metadata(LLMMetadata):
     credits: list[str]
     ai_disclosure: str
     ai_visuals_used: bool = Field(description="True → tick the platform's 'altered/synthetic content' label")
+    summary: str = ""  # the LLM's own text, so `description` can be rebuilt after a clip swap without the LLM
 
 
 PROMPT = """Write upload metadata for a {kind} video in {lang_name}.
@@ -75,22 +76,32 @@ def generate_metadata(script: Script, assets: list[Asset], llm: LLMChain) -> Met
         shorts_rule="; include #shorts" if script.format == "short" else "",
     ), LLMMetadata)
 
+    return _compose(llm_meta.title.strip()[:TITLE_MAX], llm_meta.description.strip(), llm_meta.tags,
+                    normalize_hashtags(llm_meta.hashtags, script.format == "short"), script, assets)
+
+
+def _compose(title: str, summary: str, tags: list[str], hashtags: list[str], script: Script,
+             assets: list[Asset]) -> Metadata:
+    """Deterministic part of the description: disclosure, sources, footage credits, hashtags."""
     credits = credit_lines(assets)
-    hashtags = normalize_hashtags(llm_meta.hashtags, script.format == "short")
     disclosure = DISCLOSURE[script.lang]
-    description = llm_meta.description.strip() + f"\n\n{disclosure}"
+    description = summary + f"\n\n{disclosure}"
     if script.sources:
         label = "Nguồn tham khảo" if script.lang == "vi" else "Sources"
         description += f"\n\n{label}:\n" + "\n".join(f"- {s.title}: {s.url}" for s in script.sources)
     if credits:
         description += "\n\nFootage:\n" + "\n".join(f"- {c}" for c in credits)
     description += "\n\n" + " ".join(hashtags)
+    return Metadata(title=title, description=description, tags=tags, hashtags=hashtags, credits=credits,
+                    ai_disclosure=disclosure, summary=summary,
+                    ai_visuals_used=any(a.source in ("flux", "wan") for a in assets))
 
-    return Metadata(
-        title=llm_meta.title.strip()[:TITLE_MAX], description=description, tags=llm_meta.tags,
-        hashtags=hashtags, credits=credits, ai_disclosure=disclosure,
-        ai_visuals_used=any(a.source in ("flux", "wan") for a in assets),
-    )
+
+def rebuild_description(meta: Metadata, script: Script, assets: list[Asset]) -> Metadata:
+    """Refresh credits/AI flag after clips changed — no LLM call. Older files lack `summary`:
+    it is the text before the disclosure line."""
+    summary = meta.summary or meta.description.split(f"\n\n{meta.ai_disclosure}")[0].strip()
+    return _compose(meta.title, summary, meta.tags, meta.hashtags, script, assets)
 
 
 def save_metadata(meta: Metadata, out: Path) -> None:

@@ -91,10 +91,27 @@ class Timeline(BaseModel):
         return last.start + last.duration
 
 
+class Alternate(BaseModel):
+    """A ranked stock candidate that was not used, kept so a scene's clip can be swapped later."""
+    uid: str
+    kind: AssetKind
+    download_url: str
+    page_url: str
+    width: int
+    height: int
+    duration: float
+    author: str
+    source: str
+    license: str
+
+
 class Asset(BaseModel):
     scene_id: int
     path: str  # relative to the video's output dir; empty for color placeholders
     kind: AssetKind
+    uid: str = ""      # stock candidate id ("pexels:v123"), used to avoid duplicates across scenes
+    query: str = ""    # search that found it
+    alternates: list[Alternate] = []
     source: str  # pexels | pixabay | flux | wan | placeholder
     url: str = ""
     author: str = ""

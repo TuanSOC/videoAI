@@ -90,8 +90,15 @@ def _render(job: Job) -> None:
     from vidgen.assemble.render import render_video
 
     script = job.read_script()
-    render_video(script, job.read_timeline(), job.read_assets(), job.settings.preset(script.format),
+    assets = job.read_assets()
+    render_video(script, job.read_timeline(), assets, job.settings.preset(script.format),
                  job.out_dir, seed=job.out_dir.name)
+    meta_path = job.out_dir / "metadata.json"
+    if meta_path.exists():  # re-render after a clip swap: keep the LLM text, refresh footage credits
+        from vidgen.metadata import Metadata, rebuild_description, save_metadata
+
+        meta = Metadata.model_validate_json(meta_path.read_text(encoding="utf-8"))
+        save_metadata(rebuild_description(meta, script, assets), meta_path)
 
 
 def _metadata(job: Job) -> None:
@@ -106,7 +113,7 @@ def _metadata(job: Job) -> None:
 # regenerated or deleted by the runner.
 STAGES = [
     Stage("voice", "timeline.json", ("voice", "voice.wav"), _voice),
-    Stage("visuals", "assets.json", ("visuals",), _visuals),
+    Stage("visuals", "assets.json", ("visuals", "thumbs"), _visuals),
     Stage("render", "final.mp4", ("segments", "subs.ass", "fonts"), _render),
     Stage("metadata", "metadata.json", (), _metadata),
 ]
@@ -239,6 +246,49 @@ def create_script(topic: str, fmt: str, lang: str, s: Settings, angle: int = 0) 
 
 def load_state(out_dir: Path) -> dict:
     return _load_state(out_dir)
+
+
+def invalidate_stage(out_dir: Path, stage: str) -> None:
+    """Remove ONE stage's outputs (unlike invalidate_from, later stages such as metadata survive)."""
+    st = STAGES[STAGE_NAMES.index(stage)]
+    for name in (st.artifact, *st.extra):
+        p = out_dir / name
+        if p.is_dir():
+            shutil.rmtree(p)
+        elif p.exists():
+            p.unlink()
+
+
+def swap_clip(out_dir: Path, s: Settings, scene_id: int, query: str | None = None) -> Asset:
+    """Replace one scene's visual (next alternate, or a search for `query`), then drop only the
+    rendered video: re-rendering reuses every other clip and refreshes metadata credits without the LLM."""
+    from vidgen.visuals.selector import Selector, stock_clients
+
+    script, assets = Job(out_dir, s).read_script(), Job(out_dir, s).read_assets()
+    scene = next((sc for sc in script.scenes if sc.id == scene_id), None)
+    current = next((a for a in assets if a.scene_id == scene_id), None)
+    if scene is None or current is None:
+        raise KeyError(f"scene {scene_id} not found")
+    seconds = next((sa.duration for sa in Job(out_dir, s).read_timeline().scenes if sa.scene_id == scene_id), 5.0)
+    selector = Selector(stock_clients(s), None, s.preset(script.format), out_dir, s.path(s.pipeline.cache_dir))
+    new = selector.swap(scene, seconds, current, {a.uid for a in assets if a.uid}, query)
+
+    if current.path and current.path != new.path:
+        (out_dir / current.path).unlink(missing_ok=True)
+    assets = [new if a.scene_id == scene_id else a for a in assets]
+    write_atomic(out_dir / "assets.json", ASSETS.dump_json(assets, indent=2))
+    invalidate_stage(out_dir, "render")
+    return new
+
+
+def actual_duration(out_dir: Path) -> float | None:
+    """Real spoken length, only while timeline.json still matches the current script.json
+    (after an edit the next run regenerates the voice, so the old length is meaningless)."""
+    tl = out_dir / "timeline.json"
+    state = _load_state(out_dir)
+    if not tl.exists() or state.get("script_hash") != _hash(out_dir / "script.json"):
+        return None
+    return round(Timeline.model_validate_json(tl.read_text(encoding="utf-8")).duration, 1)
 
 
 def run_stages(out_dir: Path, s: Settings, force: str | None = None,
