@@ -193,3 +193,40 @@ def test_extend_script_noop_when_long_enough():
     s = Script(title="t", hook="h", lang="vi", format="short",
                scenes=[Scene(id=1, narration=long_text, visual_query="q")])
     assert writer.extend_script(s, get_settings().preset("short"), LLMChain([FakeProvider("x", [SHORT])])) is None
+
+
+def test_expansion_that_moves_the_closing_question_is_rejected():
+    extra = [scene(" ".join(["mới"] * 20) + ".") for _ in range(8)]
+    moved = {"scenes": SHORT["scenes"][:3] + extra[:4] + [SHORT["scenes"][3]] + extra[4:]}  # question not last
+    fake = FakeProvider("fake", [SHORT, moved])
+    script = writer.generate("x", "short", "vi", get_settings().preset("short"), LLMChain([fake]))
+    assert script.scenes[-1].narration == "What do you think?" and script.word_count < 20
+
+
+def test_keeps_originals_requires_order():
+    a, b, c = (writer.LLMScene(narration=t, visual_query="q") for t in ("A.", "B.", "C."))
+    n = writer.LLMScene(narration="N.", visual_query="q")
+    assert writer._keeps_originals([a, b, c], [a, n, b, n, c])
+    assert not writer._keeps_originals([a, b, c], [a, c, b, n, c])   # reordered / duplicated
+    assert writer._keeps_originals([a, b], [a, b, n], pin_last=False)  # middle chapter may grow at its end
+    assert not writer._keeps_originals([a, b, c], [a, b, n])         # closing dropped
+
+
+def test_extend_script_keeps_non_contiguous_chapters_in_place():
+    from vidgen.models import Script
+    s = Script(title="t", hook="h", lang="en", format="long", scenes=[
+        Scene(id=1, narration="A one.", visual_query="q", chapter="A"),
+        Scene(id=2, narration="B one.", visual_query="q", chapter="B"),
+        Scene(id=3, narration="A two.", visual_query="q", chapter="A")])  # moved across the border
+
+    class Same:
+        name = "same"
+
+        def generate_json(self, prompt, schema):
+            data = json.loads(prompt.split("Current scenes (JSON, in order):")[1].split("The script has")[0])
+            first, rest = data[0], data[1:]
+            return json.dumps({"scenes": [first, scene(" ".join(["x"] * 20) + ".")] + rest})
+
+    out = writer.extend_script(s, get_settings().preset("long"), LLMChain([Same()]))
+    order = [sc.chapter for sc in out.scenes]
+    assert order == ["A", "A", "B", "B", "A"]  # runs extended in place, nothing merged; closing kept last

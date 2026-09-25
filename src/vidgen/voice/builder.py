@@ -11,6 +11,7 @@ across 100+ scenes the way summed MP3 estimates would.
 
 import asyncio
 import logging
+import unicodedata
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,7 +48,13 @@ def build_timeline(scene_ids: list[int], paths: list[str], durations: list[float
 
 
 def _bare(token: str) -> str:
-    return "".join(ch for ch in token.casefold() if ch.isalnum())
+    # NFC: the same Vietnamese letter can be one code point or base + combining mark
+    return "".join(ch for ch in unicodedata.normalize("NFC", token.casefold()) if ch.isalnum())
+
+
+def cut_point(prev_end: float, next_start: float) -> float:
+    """Middle of the pause between two scenes; if the words overlap, never cut into the last word."""
+    return (prev_end + next_start) / 2 if next_start >= prev_end else prev_end
 
 
 def plan_groups(scenes: list[Scene], max_words: int = MAX_GROUP_WORDS) -> list[list[Scene]]:
@@ -71,6 +78,7 @@ def split_by_scene(scenes: list[Scene], words: list[WordTiming]) -> list[list[Wo
     """Assign a group's word boundaries to its scenes. TTS reports each word as written, but may split
     one token in two ("AI-generated"), so boundaries are concatenated until they spell the token.
     None when they don't line up — the caller then voices those scenes one by one."""
+    words = [w for w in words if _bare(w.word)]  # punctuation-only boundaries carry no word
     out: list[list[WordTiming]] = []
     i = 0
     for sc in scenes:
@@ -110,8 +118,10 @@ def _save_scene(voice_dir: Path, scene: Scene, piece: Piece) -> None:
     """Write scene_NNN.wav + its word sidecar (words local to the scene). Sidecar last = 'done' marker."""
     wav = voice_dir / f"scene_{scene.id:03d}.wav"
     _cut(piece, wav)
-    local = [w.model_copy(update={"start": w.start - piece.start, "end": w.end - piece.start}) for w in piece.words]
-    (voice_dir / f"scene_{scene.id:03d}.words.json").write_bytes(WORDS.dump_json(local))
+    local = [w.model_copy(update={"start": max(0.0, w.start - piece.start), "end": max(0.0, w.end - piece.start)})
+             for w in piece.words]
+    # atomic: a half-written sidecar would count as "done" on resume and then fail to parse
+    write_atomic(voice_dir / f"scene_{scene.id:03d}.words.json", WORDS.dump_json(local))
 
 
 def _done(voice_dir: Path, scene: Scene) -> bool:
@@ -138,8 +148,8 @@ async def _voice_group(group: list[Scene], voice: str, voice_dir: Path, synth: S
                 log.info("%s: word boundaries didn't line up, voicing scene by scene", label)
         if split is not None:
             for k, (sc, ws) in enumerate(zip(todo, split)):
-                start = 0.0 if k == 0 else (split[k - 1][-1].end + ws[0].start) / 2
-                end = (ws[-1].end + split[k + 1][0].start) / 2 if k + 1 < len(todo) else None
+                start = 0.0 if k == 0 else cut_point(split[k - 1][-1].end, ws[0].start)
+                end = cut_point(ws[-1].end, split[k + 1][0].start) if k + 1 < len(todo) else None
                 await asyncio.to_thread(_save_scene, voice_dir, sc, Piece(mp3, start, end, ws))
             return
         for sc in todo:

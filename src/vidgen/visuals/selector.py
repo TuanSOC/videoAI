@@ -58,14 +58,19 @@ SUBJECT_SHARE = 0.4  # a word in ≥40% of the scenes' queries is what the video
 
 
 def stem(w: str) -> str:
-    """Crude, idempotent plural folding (caves→cave, octopuses→octopus, octopus stays)."""
-    if w.endswith("uses") and len(w) > 5:
-        return w[:-2]
-    if w.endswith("ies") and len(w) > 4:
-        return w[:-3] + "y"
-    if w.endswith(("us", "ss", "is")) or len(w) <= 3:
+    """Crude, idempotent match key: singular and plural fold together (octopus/octopuses → octopus,
+    house/houses → hous, cave/caves → cav, box/boxes → box). Only compared, never shown or searched."""
+    if len(w) <= 3:
         return w
-    return w[:-1] if w.endswith("s") else w
+    if w.endswith("ies") and len(w) > 4:
+        w = w[:-3] + "y"
+    elif w.endswith("es") and w[:-2].endswith(("s", "x", "z", "ch", "sh")):
+        w = w[:-2]
+    elif w.endswith("s") and not w.endswith(("ss", "us", "is")):
+        w = w[:-1]
+    if w.endswith("e") and len(w) > 3:  # house/houses both end up "hous"
+        w = w[:-1]
+    return w
 
 
 def content_words(text: str) -> set[str]:
@@ -110,11 +115,13 @@ def fallback_queries(query: str, subject: str | None = None) -> list[str]:
     out = list(parts)
     words = parts[0].split()
     if subject:
-        others = [w for w in content_words(parts[0]) - {subject}]
-        last = next((stem(w.lower()) for w in reversed(words) if stem(w.lower()) in others), None)
+        # search with real words (stems like "cav" are only match keys)
+        subject_word = next((w.lower() for w in words if stem(w.lower()) == subject), subject)
+        others = content_words(parts[0]) - {subject}
+        last = next((w.lower() for w in reversed(words) if stem(w.lower()) in others), None)
         if last:
-            out.append(f"{subject} {last}")
-        out.append(subject)
+            out.append(f"{subject_word} {last}")
+        out.append(subject_word)
     else:  # no shared subject: keep two-word phrases, a lone last word ("activity") is too vague
         if len(words) > 2:
             out.append(" ".join(words[:2]))
@@ -198,6 +205,7 @@ class Selector:
         base = query_text or scene.visual_query
         query_words = content_words(base)
         subject = self.subject if self.subject in query_words else None
+        judged = False  # one LLM judgement per search: ~16 calls for one scene were possible
         for query in fallback_queries(base, subject):
             candidates: list[Candidate] = []
             for client in self.clients:
@@ -219,7 +227,8 @@ class Selector:
             # screen" for "computer screen showing malware"): let the LLM read the narration and choose
             matched = rated[0][0] - (1 if subject else 0)
             weak = matched < max(2, len(query_words) - 1)
-            if self.judge and weak and len(ranked) > 1:
+            if self.judge and weak and len(ranked) > 1 and not judged:
+                judged = True
                 top = ranked[:JUDGE_TOP]
                 idx = self.judge(scene.narration, base, [c.text for c in top])
                 if idx == -1 and strict:

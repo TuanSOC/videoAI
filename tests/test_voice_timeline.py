@@ -148,3 +148,18 @@ def test_grouped_voice_one_request_cut_at_pauses(tmp_path):
     assert s1.duration == pytest.approx(1.5 + GAP_SECONDS, abs=0.06)
     assert s2.words[0].start == pytest.approx(s2.start + (1.9 - 1.5), abs=0.06)
     assert ffmpeg.duration(tmp_path / "voice.wav") == pytest.approx(tl.duration, abs=0.02)
+
+
+def test_cut_point_never_cuts_into_an_overlapping_word():
+    from vidgen.voice.builder import cut_point
+    assert cut_point(1.0, 2.0) == 1.5
+    assert cut_point(2.1, 2.0) == 2.1
+
+
+def test_split_ignores_punctuation_boundaries_and_nfc_differences():
+    import unicodedata
+    from vidgen.voice.builder import split_by_scene
+    nfd = unicodedata.normalize("NFD", "Bạch tuộc.")
+    scenes = [_scene(1, nfd)]
+    words = [w("Bạch", 0, .3), w("tuộc", .3, .6), w("…", .6, .6)]
+    assert [[x.word for x in s] for s in split_by_scene(scenes, words)] == [["Bạch", "tuộc"]]

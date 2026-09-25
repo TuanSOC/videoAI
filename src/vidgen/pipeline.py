@@ -273,6 +273,12 @@ def write_brief(out_dir: Path, s: Settings) -> None:
     t = time.time()
     brief = make_brief(state["topic"], state["lang"], state["format"], default_chain(s),
                        research=s.pipeline.research)
+    old = load_brief(out_dir)
+    if old is not None and (out_dir / "script.json").exists():
+        # new angles, same script: keep what the script was written from until another angle is chosen
+        current = old.chosen_angle()
+        if current is not None:
+            brief.script_angle = current.model_copy(update={"sources": old.chosen_sources()})
     write_atomic(out_dir / BRIEF_FILE, brief.model_dump_json(indent=2))
     state.setdefault("timings", {})["brief"] = round(time.time() - t, 1)
     _save_state(out_dir, state)

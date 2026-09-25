@@ -46,13 +46,19 @@ class Brief(BaseModel):
     angles: list[Angle] = Field(min_length=1)
     chosen: int | None = None
     excluded_urls: list[str] = []  # sources the user unticked
+    # the angle (with only its ticked sources) the CURRENT script was written from; kept when new
+    # angles are generated so fact-check / extend / rewrite keep their facts until another is chosen
+    script_angle: Angle | None = None
 
     def chosen_angle(self) -> Angle | None:
-        return self.angles[self.chosen] if self.chosen is not None else None
+        if self.chosen is not None:
+            return self.angles[self.chosen]
+        return self.script_angle
 
     def chosen_sources(self) -> list[SourceDoc]:
-        angle = self.chosen_angle()
-        return [s for s in angle.sources if s.url not in self.excluded_urls] if angle else []
+        if self.chosen is not None:
+            return [s for s in self.angles[self.chosen].sources if s.url not in self.excluded_urls]
+        return list(self.script_angle.sources) if self.script_angle else []
 
 
 class Script(BaseModel):

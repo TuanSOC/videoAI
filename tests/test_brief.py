@@ -144,3 +144,24 @@ def test_choose_angle_errors(tmp_path):
     write_brief_file(tmp_path)
     with pytest.raises(IndexError):
         pipeline.choose_angle(tmp_path, 3)
+
+
+def test_regenerating_angles_keeps_the_current_scripts_sources(tmp_path, monkeypatch):
+    old_src = SourceDoc(title="Octopus", url="u-old", lang="en", text="t")
+    bad = SourceDoc(title="Crocodile", url="u-bad", lang="en", text="t")
+    old = Brief(topic="t", angles=[Angle(style="story", title="Old", hook="h", key_points=["k"],
+                                         sources=[old_src, bad])], chosen=0, excluded_urls=["u-bad"])
+    (tmp_path / pipeline.BRIEF_FILE).write_text(old.model_dump_json(), encoding="utf-8")
+    (tmp_path / "script.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "state.json").write_text('{"topic": "t", "format": "short", "lang": "vi"}', encoding="utf-8")
+    fresh = Brief(topic="t", angles=[Angle(style="explain", title="New", hook="h", key_points=["k"])])
+    monkeypatch.setattr("vidgen.script.brief.make_brief", lambda *a, **k: fresh.model_copy(deep=True))
+    monkeypatch.setattr("vidgen.script.llm.default_chain", lambda s: None)
+
+    pipeline.write_brief(tmp_path, get_settings())
+    b = pipeline.load_brief(tmp_path)
+    assert b.chosen is None and b.angles[0].title == "New"                    # new angles to pick from
+    assert b.chosen_angle().title == "Old"                                    # script's angle kept
+    assert [s.url for s in b.chosen_sources()] == ["u-old"]                    # unticked source stays out
+    pipeline.choose_angle(tmp_path, 0)
+    assert pipeline.load_brief(tmp_path).chosen_angle().title == "New"        # a new pick takes over

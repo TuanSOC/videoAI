@@ -291,10 +291,12 @@ def tcand(uid, text, w=1080, h=1920, dur=10.0):
 
 
 def test_stem_is_idempotent():
-    for w in ("octopus", "octopuses", "caves", "cave", "bodies", "glass"):
+    for w in ("octopus", "octopuses", "caves", "cave", "bodies", "glass", "houses", "boxes", "images"):
         assert sel.stem(sel.stem(w)) == sel.stem(w)
-    assert sel.stem("octopuses") == sel.stem("octopus") == "octopus"
-    assert sel.stem("caves") == "cave"
+    for a, b in [("octopuses", "octopus"), ("caves", "cave"), ("houses", "house"), ("pauses", "pause"),
+                 ("boxes", "box"), ("buses", "bus"), ("images", "image"), ("bodies", "body")]:
+        assert sel.stem(a) == sel.stem(b), (a, b)
+    assert sel.stem("octopus") == "octopus"
 
 
 def test_video_subject():
@@ -316,7 +318,7 @@ def test_relevance_prefers_matching_description_and_requires_subject():
 
 def test_fallback_queries_keep_subject():
     assert sel.fallback_queries("octopus moving between caves", "octopus") == \
-        ["octopus moving between caves", "octopus cave", "octopus"]
+        ["octopus moving between caves", "octopus caves", "octopus"]  # real words, not stems
 
 
 def test_pick_ranks_relevance_above_technical_fit(tmp_path, fake_download):
@@ -330,7 +332,7 @@ def test_pick_ranks_relevance_above_technical_fit(tmp_path, fake_download):
 
 def test_strict_skips_irrelevant_then_subject_only_query(tmp_path, fake_download):
     stock = FakeStock(videos={"octopus moving between caves": [tcand("cave", "nemrut dagi cave entrances")],
-                              "octopus cave": [],
+                              "octopus caves": [],
                               "octopus": [tcand("oct", "octopus crawling on reef")]})
     s = make_selector(tmp_path, [stock])
     s.subject = "octopus"

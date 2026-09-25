@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+from itertools import groupby
 from pathlib import Path
 from string import Template
 
@@ -104,7 +105,7 @@ WORDS_PER_NEW_SCENE = 15
 
 
 def expand_scenes(scenes: list[LLMScene], target_words: int, ctx: dict, lang: str,
-                  llm: LLMChain) -> list[LLMScene] | None:
+                  llm: LLMChain, pin_last: bool = True) -> list[LLMScene] | None:
     """Grow a draft toward target_words by INSERTING scenes built from unused facts.
     Small local models ignore "write longer" when rewriting from scratch (real drafts stayed at
     117-164 words for a ~200 target); extending a draft they can see works far better.
@@ -122,10 +123,27 @@ def expand_scenes(scenes: list[LLMScene], target_words: int, ctx: dict, lang: st
     except Exception as e:  # LLM trouble just means "keep the draft"
         log.warning("expanding the script failed: %s", e)
         return None
-    kept = {s.narration.strip() for s in result}
-    preserved = sum(s.narration.strip() in kept for s in scenes) / len(scenes)
     grew = sum(len(s.narration.split()) for s in result) > current
-    return result if grew and preserved >= 0.8 else None
+    return result if grew and _keeps_originals(scenes, result, pin_last) else None
+
+
+def _keeps_originals(original: list[LLMScene], result: list[LLMScene], pin_last: bool = True) -> bool:
+    """Every original scene is still there exactly once, in the same order, the first one still first
+    and (pin_last: the video's closing question) the last one still last. A set/percentage check let
+    reorders, drops and duplicates through."""
+    new = [s.narration.strip() for s in result]
+    old = [s.narration.strip() for s in original]
+    if not old or new[0] != old[0] or (pin_last and new[-1] != old[-1]):
+        return False
+    if any(new.count(t) != old.count(t) for t in set(old)):
+        return False
+    pos = 0
+    for text in old:  # subsequence check
+        try:
+            pos = new.index(text, pos) + 1
+        except ValueError:
+            return False
+    return True
 
 
 def _generate_with_length(llm: LLMChain, prompt: str, schema, target_words: int, ctx: dict, lang: str):
@@ -176,21 +194,22 @@ def extend_script(script: Script, preset: FormatPreset, llm: LLMChain, sources: 
     ctx = {"facts": facts_block(sources or []), "angle": angle_block(angle)}
     target = int(target_seconds(preset) * WORDS_PER_SECOND[script.lang])
     total = script.word_count
-    if total >= target:
+    if total == 0 or total >= target:
         return None
-    groups: dict[str | None, list[Scene]] = {}
-    for sc in script.scenes:
-        groups.setdefault(sc.chapter, []).append(sc)
     out: list[Scene] = []
     changed = False
-    for chapter, scenes in groups.items():
+    # consecutive runs only: a scene moved across a chapter border must not be pulled back into it
+    for chapter, run in groupby(script.scenes, key=lambda sc: sc.chapter):
+        scenes = list(run)
         words = sum(len(s.narration.split()) for s in scenes)
         share = (target - total) * words / total
         grown = None
         if chapter != "Intro" and share >= WORDS_PER_NEW_SCENE / 2:
             drafts = [LLMScene(narration=s.narration, visual_query=s.visual_query, visual_type=s.visual_type,
                                ai_prompt=s.ai_prompt) for s in scenes]
-            grown = expand_scenes(drafts, int(words + share), ctx, script.lang, llm)
+            # only the last chapter holds the closing question that must stay last
+            grown = expand_scenes(drafts, int(words + share), ctx, script.lang, llm,
+                                  pin_last=scenes[-1] is script.scenes[-1])
         if grown:
             changed = True
             out += [Scene(id=0, chapter=chapter, **s.model_dump()) for s in grown]

@@ -16,6 +16,7 @@ from vidgen.script.research import Source, facts_block
 log = logging.getLogger(__name__)
 PROMPT = Path(__file__).parent / "prompts" / "factcheck.md"
 FILE = "factcheck.json"
+SCENES_PER_CHECK = 25
 
 
 class Issue(BaseModel):
@@ -38,10 +39,14 @@ def fact_check(script: Script, sources: list[Source], llm: LLMChain) -> FactChec
 
     if not sources:
         return FactCheck(checked=False)
-    scenes = "\n".join(f"{s.id}. {s.narration}" for s in script.scenes)
-    prompt = Template(PROMPT.read_text(encoding="utf-8")).substitute(
-        facts=facts_block(sources), scenes=scenes, lang_name=LANG_NAMES[script.lang])
-    found = llm.generate(prompt, Issues).issues
+    template = Template(PROMPT.read_text(encoding="utf-8"))
+    found: list[Issue] = []
+    # batches: a 100-scene long video in one prompt would overflow the 8k context
+    for i in range(0, len(script.scenes), SCENES_PER_CHECK):
+        batch = script.scenes[i:i + SCENES_PER_CHECK]
+        prompt = template.substitute(facts=facts_block(sources), lang_name=LANG_NAMES[script.lang],
+                                     scenes="\n".join(f"{s.id}. {s.narration}" for s in batch))
+        found += llm.generate(prompt, Issues).issues
     by_id = {s.id: s for s in script.scenes}
     # the model sometimes "reports" questions just to say they need no check (seen live): drop them
     return FactCheck(checked=True, issues=[

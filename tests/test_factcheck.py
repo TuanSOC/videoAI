@@ -87,3 +87,12 @@ def test_rewrite_keeps_english_visual_query():
     llm = Fake({"narration": "Mới.", "visual_query": "bạch tuộc trong hang", "visual_type": "stock", "ai_prompt": ""})
     out = writer.rewrite_one(SCRIPT, SCRIPT.scenes[0], "", "", None, [SRC], None, LLMChain([llm]))
     assert out.visual_query == "q"
+
+
+def test_fact_check_batches_long_scripts():
+    from vidgen.script import factcheck
+    long_script = Script(title="t", hook="h", lang="vi", format="long",
+                         scenes=[Scene(id=i, narration=f"Câu {i}.", visual_query="q") for i in range(1, 61)])
+    llm = Fake({"issues": []})
+    fact_check(long_script, [SRC], LLMChain([llm]))
+    assert len(llm.prompts) == 3 and "60. Câu 60." in llm.prompts[2] and "26." not in llm.prompts[0]

@@ -196,7 +196,7 @@ def test_job_persisted_to_disk(env):
     slug = create(client, jobs, auto_render=True)
     saved = json.loads((s.pipeline.output_dir / slug / "job.json").read_text(encoding="utf-8"))
     assert saved["status"] == "done" and saved["stages"]["render"].startswith("done")
-    assert saved["options"] == {"then_render": True}
+    assert saved["options"] == {"then_render": True, "regenerate": False}
 
 
 def test_restart_marks_running_job_interrupted_and_resume_finishes(env):
@@ -490,3 +490,19 @@ def test_regenerate_brief_runs_brief_again(env):
     jobs.wait_idle()
     assert (s.pipeline.output_dir / slug / "brief.json").stat().st_mtime_ns >= before
     assert client.get(f"/api/videos/{slug}").json()["job"]["kind"] == "brief"
+
+
+def test_light_jobs_do_not_wait_behind_renders():
+    import threading
+    from vidgen.web.jobs import lane_of
+    assert lane_of("render", {}) == "heavy" and lane_of("script", {"then_render": True}) == "heavy"
+    assert lane_of("check", {}) == "light" and lane_of("brief", {"then_render": False}) == "light"
+    q = JobQueue()
+    release, light_done = threading.Event(), threading.Event()
+    q.submit("a", "render", lambda job: release.wait(5))
+    q.submit("b", "check", lambda job: light_done.set())
+    try:
+        assert light_done.wait(2)  # finished while the render is still running
+    finally:
+        release.set()
+        q.wait_idle()

@@ -17,11 +17,18 @@ const safeUrl = (u) => (/^https?:\/\//i.test(String(u ?? "")) ? esc(u) : "#");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
+class NetworkError extends Error {} // the server is unreachable (e.g. restarting), not a code bug
+
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" }, ...opts,
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      headers: { "Content-Type": "application/json" }, ...opts,
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    });
+  } catch (e) {
+    throw new NetworkError(e.message);
+  }
   const data = res.headers.get("content-type")?.includes("json") ? await res.json() : null;
   if (!res.ok) {
     const d = data?.detail;
@@ -80,7 +87,9 @@ async function watchJobs() {
       watching.delete(slug);
       const v = videos.find((x) => x.slug === slug);
       if (!v) continue;
-      const text = `${DONE_TEXT[v.status] || "Đã xong"}: ${title}`;
+      const what = v.job_kind === "brief" && v.status !== "error"
+        ? "Đã có 3 góc khai thác mới" : DONE_TEXT[v.status] || "Đã xong";
+      const text = `${what}: ${title}`;
       toast(text, v.status === "error" ? "error" : "");
       if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
         const n = new Notification("vidgen studio", { body: text, tag: slug });
@@ -108,7 +117,7 @@ async function route() {
     else if (hash.startsWith("#/settings")) await renderSettings();
     else await renderLibrary();
   } catch (e) {
-    if (e instanceof TypeError) { // network error: server restarting — reconnect instead of a dead page
+    if (e instanceof NetworkError) { // server restarting: reconnect instead of a dead page
       view.innerHTML = `<div class="banner info">Đang kết nối lại với vidgen… (server có thể đang khởi động lại)</div>`;
       poll(route, 2000);
       return;
@@ -437,7 +446,7 @@ function wireBrief(slug, v) {
       b.disabled = true;
       try {
         await api(`/api/videos/${slug}/brief/regenerate`, { method: "POST" });
-        briefMode = null;
+        briefMode = slug; // show the new angle cards when they arrive, even if a script exists
         toast("Đang tra nguồn lại và đề xuất 3 góc mới…");
         renderDetail(slug);
       } catch (e) { toast(e.message, "error"); b.disabled = false; }
@@ -548,12 +557,16 @@ async function aiRewrite(slug, i, btn, lang, job) {
   btn.disabled = true;
   btn.textContent = "Đang viết…";
   try {
+    const before = { narration: scene.narration, visual_query: scene.visual_query };
     const out = await api(`/api/videos/${slug}/scenes/${scene.id}/rewrite`, { method: "POST",
       body: { narration: scene.narration, instruction: instruction || null } });
-    aiUndo.set(i, { narration: scene.narration, visual_query: scene.visual_query });
+    // the user may have moved/removed scenes while waiting: follow the scene object, not the index
+    const now = draft.scenes.indexOf(scene);
+    if (now < 0) return toast("Cảnh đã bị xóa trong lúc AI đang viết — bỏ qua kết quả");
+    aiUndo.set(now, before);
     scene.narration = out.narration;
     scene.visual_query = out.visual_query;
-    aiOpen.delete(i);
+    aiOpen.delete(now);
     markDirty();
     renderScenes(lang, false, job);
   } catch (e) {

@@ -164,11 +164,12 @@ def create_app(settings: Callable[[], Settings] = get_settings,
             "scenes": len(script.scenes) if script else 0,
             "status": video_status(d, job),
             "stage": job.current if job else "",
+            "job_kind": job.kind if job else "",
             "has_video": (d / "final.mp4").exists(),
             "updated": last_modified(d),
         }
 
-    def enqueue_brief(d: Path, then_render: bool) -> None:
+    def enqueue_brief(d: Path, then_render: bool, regenerate: bool = False) -> None:
         """Angles + sources. With then_render (auto mode) it also picks angle 1 and runs everything."""
         def work(job: JobStatus) -> None:
             job.current = "brief"
@@ -185,7 +186,8 @@ def create_app(settings: Callable[[], Settings] = get_settings,
                 job.stages["script"] = "done"
                 job.save()
                 run_render(job, d, s, None)
-        jobs.submit(d.name, "brief", work, out_dir=d, options={"then_render": then_render})
+        jobs.submit(d.name, "brief", work, out_dir=d,
+                    options={"then_render": then_render, "regenerate": regenerate})
 
     def enqueue_script(d: Path, then_render: bool) -> None:
         def work(job: JobStatus) -> None:
@@ -313,7 +315,7 @@ def create_app(settings: Callable[[], Settings] = get_settings,
         another angle is chosen)."""
         d = video_dir(slug)
         with exclusive(slug):
-            enqueue_brief(d, then_render=False)
+            enqueue_brief(d, then_render=False, regenerate=True)
         return {"ok": True}
 
     def enqueue_task(d: Path, kind: str, fn: Callable[[Path, Settings], object]) -> None:
@@ -410,8 +412,11 @@ def create_app(settings: Callable[[], Settings] = get_settings,
                 # re-running could add scenes twice if the first run already saved; let the user decide
                 job.status = "done"
                 job.save()
-            elif job.kind == "brief" and not (d / pipeline.BRIEF_FILE).exists():
-                enqueue_brief(d, then_render=bool(job.options.get("then_render")))
+            elif job.kind == "brief" and (job.options.get("regenerate")
+                                          or not (d / pipeline.BRIEF_FILE).exists()):
+                # a cut-off regeneration left the OLD angles on disk: run it again
+                enqueue_brief(d, then_render=bool(job.options.get("then_render")),
+                              regenerate=bool(job.options.get("regenerate")))
             elif job.kind == "brief" and not job.options.get("then_render"):
                 job.status = "done"  # brief.json was written before the cut: nothing left to run
                 job.save()

@@ -69,24 +69,36 @@ class JobBusyError(RuntimeError):
 Work = Callable[[JobStatus], None]
 
 
+def lane_of(kind: str, options: dict) -> str:
+    """Renders (and auto flows that end in a render) are minutes long; briefs, scripts, fact checks
+    and extensions are short LLM calls. Separate lanes keep a "Kiểm tra lại" from waiting behind a
+    whole "Render tất cả" batch."""
+    return "heavy" if kind == "render" or options.get("then_render") else "light"
+
+
 class JobQueue:
+    """One worker per lane (heavy / light); still at most one job per video at a time."""
+
+    LANES = ("heavy", "light")
+
     def __init__(self):
-        self._q: queue.Queue[tuple[JobStatus, Work]] = queue.Queue()
+        self._queues: dict[str, queue.Queue[tuple[JobStatus, Work]]] = {n: queue.Queue() for n in self.LANES}
         self._jobs: dict[str, JobStatus] = {}  # latest job per slug
         self._lock = threading.Lock()
-        self._thread = threading.Thread(target=self._loop, daemon=True, name="vidgen-worker")
-        self._thread.start()
+        for name, q in self._queues.items():
+            threading.Thread(target=self._loop, args=(q,), daemon=True, name=f"vidgen-{name}").start()
 
     def submit(self, slug: str, kind: str, work: Work, out_dir: Path | None = None,
                options: dict | None = None) -> JobStatus:
+        options = options or {}
         with self._lock:
             active = self._jobs.get(slug)
             if active and active.status in ACTIVE:
                 raise JobBusyError(f"{slug} already has a {active.kind} job {active.status}")
-            job = JobStatus(slug=slug, kind=kind, options=options or {}, out_dir=out_dir)
+            job = JobStatus(slug=slug, kind=kind, options=options, out_dir=out_dir)
             self._jobs[slug] = job
         job.save()
-        self._q.put((job, work))
+        self._queues[lane_of(kind, options)].put((job, work))
         return job
 
     def get(self, slug: str) -> JobStatus | None:
@@ -100,14 +112,14 @@ class JobQueue:
         """Test helper: block until nothing is queued or running."""
         deadline = time.time() + timeout
         while time.time() < deadline:
-            if self._q.unfinished_tasks == 0:
+            if all(q.unfinished_tasks == 0 for q in self._queues.values()):
                 return
             time.sleep(0.05)
         raise TimeoutError("jobs still running")
 
-    def _loop(self) -> None:
+    def _loop(self, q: queue.Queue) -> None:
         while True:
-            job, work = self._q.get()
+            job, work = q.get()
             job.status = "running"
             try:
                 job.save()
@@ -123,4 +135,4 @@ class JobQueue:
                     job.save()
                 except OSError:  # e.g. the video folder was deleted meanwhile
                     log.warning("could not persist job %s", job.slug)
-                self._q.task_done()
+                q.task_done()
