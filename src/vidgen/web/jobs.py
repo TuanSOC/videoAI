@@ -62,6 +62,10 @@ def mark_interrupted(out_dir: Path) -> bool:
     return True
 
 
+class JobBusyError(RuntimeError):
+    """A video already has a queued or running job."""
+
+
 Work = Callable[[JobStatus], None]
 
 
@@ -78,7 +82,7 @@ class JobQueue:
         with self._lock:
             active = self._jobs.get(slug)
             if active and active.status in ACTIVE:
-                raise RuntimeError(f"{slug} already has a {active.kind} job {active.status}")
+                raise JobBusyError(f"{slug} already has a {active.kind} job {active.status}")
             job = JobStatus(slug=slug, kind=kind, options=options or {}, out_dir=out_dir)
             self._jobs[slug] = job
         job.save()

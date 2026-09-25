@@ -143,7 +143,10 @@ class Wikipedia:
             resp = self.http.get(f"https://{lang}.wikipedia.org/w/api.php", params=params)
             if resp.status_code != 429 or attempt == RATE_LIMIT_RETRIES:
                 break
-            wait = min(float(resp.headers.get("Retry-After", "5") or 5), MAX_RETRY_WAIT)
+            try:  # Retry-After may also be an HTTP date; then just wait a moment
+                wait = min(float(resp.headers.get("Retry-After", "5") or 5), MAX_RETRY_WAIT)
+            except ValueError:
+                wait = 5.0
             log.warning("wikipedia rate limit, waiting %.0fs", wait)
             self.sleep(wait)
         resp.raise_for_status()

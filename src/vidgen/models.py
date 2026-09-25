@@ -112,6 +112,12 @@ class Asset(BaseModel):
     uid: str = ""      # stock candidate id ("pexels:v123"), used to avoid duplicates across scenes
     query: str = ""    # search that found it
     alternates: list[Alternate] = []
+    rejected: list[str] = []  # clips the user swapped away from this scene (uid or page url)
+
+    @property
+    def ident(self) -> str:
+        """uid when known; older assets.json files only have the page url."""
+        return self.uid or self.url
     source: str  # pexels | pixabay | flux | wan | placeholder
     url: str = ""
     author: str = ""

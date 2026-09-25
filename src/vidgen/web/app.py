@@ -4,8 +4,10 @@ import hashlib
 import json
 import re
 import shutil
+import threading
 import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
 
@@ -19,7 +21,7 @@ from vidgen.config import SECRET_KEYS, Settings, get_settings, update_env_file
 from vidgen.fsutil import write_atomic
 from vidgen.models import Asset, Script
 from vidgen.script.writer import WORDS_PER_SECOND
-from vidgen.web.jobs import JobQueue, JobStatus, load_job, mark_interrupted
+from vidgen.web.jobs import JobBusyError, JobQueue, JobStatus, load_job, mark_interrupted
 
 STATIC = Path(__file__).parent / "static"
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,80}$")
@@ -240,6 +242,7 @@ def create_app(settings: Callable[[], Settings] = get_settings,
                     src["chars"] = len(src["text"])
                     src["text"] = src["text"][:SOURCE_PREVIEW_CHARS]
         info = summary(d)
+        actual = pipeline.actual_duration(d)
         return {
             **info,
             "script": read_json_model(d / "script.json", Script),
@@ -247,43 +250,60 @@ def create_app(settings: Callable[[], Settings] = get_settings,
             # length indicator: estimate = words / wps in the UI, target range per format, real length once voiced
             "target_seconds": list(settings().preset(info["format"]).target_seconds),
             "wps": WORDS_PER_SECOND[info["lang"]],
-            "actual_seconds": pipeline.actual_duration(d),
+            "actual_seconds": actual,
             "metadata": json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else None,
             "timings": pipeline.load_state(d).get("timings", {}),
             "job": job.to_dict() if job else None,
             "artifacts": {st.name: (d / st.artifact).exists() for st in pipeline.STAGES},
             # per-scene clips, only while they still match the script (after an edit they'll be re-picked)
-            "assets": ([asset_view(a) for a in read_assets(d) or []]
-                       if pipeline.actual_duration(d) is not None else None),
+            "assets": [asset_view(a) for a in read_assets(d) or []] if actual is not None else None,
         }
+
+    # One writer per video at a time. The job queue covers background jobs; this lock covers the
+    # request-thread work (a clip swap downloads for seconds) and the check-then-submit windows.
+    locks: dict[str, threading.Lock] = {}
+    locks_guard = threading.Lock()
+
+    @contextmanager
+    def exclusive(slug: str, check_busy: bool = True):
+        with locks_guard:
+            lock = locks.setdefault(slug, threading.Lock())
+        if not lock.acquire(blocking=False):
+            raise HTTPException(409, "video đang được thao tác (ví dụ đang đổi clip) — thử lại sau giây lát")
+        try:
+            if check_busy and jobs.busy(slug):
+                raise HTTPException(409, "a job is running for this video")
+            yield
+        except JobBusyError as e:  # JobQueue.submit refusing a second job for the same video
+            raise HTTPException(409, str(e)) from e
+        finally:
+            lock.release()
 
     @app.post("/api/videos/{slug}/brief")
     def choose(slug: str, req: ChooseAngle) -> dict:
         """Pick (and optionally edit) an angle, then write the script from it."""
         d = video_dir(slug)
-        if jobs.busy(slug):
-            raise HTTPException(409, "a job is running for this video")
-        try:
-            pipeline.choose_angle(d, req.angle, req.title, req.hook, req.key_points, req.excluded_urls)
-        except ValueError as e:
-            raise HTTPException(409, str(e)) from e
-        except IndexError as e:
-            raise HTTPException(422, str(e)) from e
-        enqueue_script(d, then_render=False)
+        with exclusive(slug):
+            try:
+                pipeline.choose_angle(d, req.angle, req.title, req.hook, req.key_points, req.excluded_urls)
+            except ValueError as e:
+                raise HTTPException(409, str(e)) from e
+            except IndexError as e:
+                raise HTTPException(422, str(e)) from e
+            enqueue_script(d, then_render=False)
         return {"ok": True}
 
     @app.put("/api/videos/{slug}/script")
     def save_script(slug: str, body: dict) -> dict:
         d = video_dir(slug)
-        if jobs.busy(slug):
-            raise HTTPException(409, "a job is running for this video")
         try:
             script = Script.model_validate(body)
         except ValidationError as e:
             raise HTTPException(422, e.errors(include_url=False)) from e
         # renumber so ids stay 1..n after the user adds/removes scenes
         script.scenes = [sc.model_copy(update={"id": i}) for i, sc in enumerate(script.scenes, 1)]
-        write_atomic(d / "script.json", script.model_dump_json(indent=2))
+        with exclusive(slug):
+            write_atomic(d / "script.json", script.model_dump_json(indent=2))
         return {"ok": True, "scenes": len(script.scenes)}
 
     @app.post("/api/videos/{slug}/render")
@@ -291,10 +311,8 @@ def create_app(settings: Callable[[], Settings] = get_settings,
         d = video_dir(slug)
         if not (d / "script.json").exists():
             raise HTTPException(409, "no script yet")
-        try:
+        with exclusive(slug, check_busy=False):
             job = submit_render(d, req.force)
-        except RuntimeError as e:
-            raise HTTPException(409, str(e)) from e
         return job.to_dict()
 
     @app.post("/api/videos/{slug}/resume")
@@ -304,7 +322,7 @@ def create_app(settings: Callable[[], Settings] = get_settings,
         job = job_of(d)
         if job is None or job.status != "interrupted":
             raise HTTPException(409, "nothing to resume")
-        try:
+        with exclusive(slug, check_busy=False):
             if job.kind == "render":
                 submit_render(d, None)  # never re-apply force: that would redo finished stages
             elif job.kind == "brief" and not (d / pipeline.BRIEF_FILE).exists():
@@ -312,48 +330,46 @@ def create_app(settings: Callable[[], Settings] = get_settings,
             elif job.kind == "brief" and not job.options.get("then_render"):
                 job.status = "done"  # brief.json was written before the cut: nothing left to run
                 job.save()
+            elif job.stages.get("script") == "done" and (d / "script.json").exists():
+                # auto job cut off after its script: only the render part is left (no second LLM call)
+                submit_render(d, None)
             else:  # script job, or an auto brief that got past the brief itself
                 brief = pipeline.load_brief(d)
                 if brief is not None and brief.chosen is None:
                     pipeline.choose_angle(d, 0)  # auto mode always takes angle 1
                 enqueue_script(d, then_render=bool(job.options.get("then_render")))
-        except RuntimeError as e:
-            raise HTTPException(409, str(e)) from e
         return {"ok": True}
 
     @app.post("/api/videos/{slug}/script/regenerate")
     def regenerate_script(slug: str) -> dict:
         d = video_dir(slug)
-        try:
+        with exclusive(slug, check_busy=False):
             enqueue_script(d, then_render=False)
-        except RuntimeError as e:
-            raise HTTPException(409, str(e)) from e
         return {"ok": True}
 
     @app.post("/api/videos/{slug}/scenes/{scene_id}/swap")
     def swap(slug: str, scene_id: int, req: SwapRequest) -> dict:
-        """Replace one scene's clip; only the final render is dropped (other clips, voice, metadata stay)."""
+        """Replace one scene's clip; only the final render is dropped (other clips, voice, metadata stay).
+        Holds the video's lock for the whole download so no render or second swap can interleave."""
         from vidgen.visuals.selector import SwapError
 
         d = video_dir(slug)
-        if jobs.busy(slug):
-            raise HTTPException(409, "a job is running for this video")
-        if not (d / "assets.json").exists() or pipeline.actual_duration(d) is None:
-            raise HTTPException(409, "render the video first (clips exist only after the visuals step)")
-        try:
-            asset = pipeline.swap_clip(d, settings(), scene_id, (req.query or "").strip() or None)
-        except KeyError as e:
-            raise HTTPException(404, str(e)) from e
-        except SwapError as e:
-            raise HTTPException(422, str(e)) from e
+        with exclusive(slug):
+            if not (d / "assets.json").exists() or pipeline.actual_duration(d) is None:
+                raise HTTPException(409, "render the video first (clips exist only after the visuals step)")
+            try:
+                asset = pipeline.swap_clip(d, settings(), scene_id, (req.query or "").strip() or None)
+            except KeyError as e:
+                raise HTTPException(404, str(e)) from e
+            except SwapError as e:
+                raise HTTPException(422, str(e)) from e
         return asset_view(asset)
 
     @app.delete("/api/videos/{slug}")
     def delete_video(slug: str) -> dict:
         d = video_dir(slug)
-        if jobs.busy(slug):
-            raise HTTPException(409, "a job is running for this video")
-        shutil.rmtree(d)
+        with exclusive(slug):
+            shutil.rmtree(d)
         return {"ok": True}
 
     # --- media ----------------------------------------------------------------------------
@@ -384,14 +400,22 @@ def create_app(settings: Callable[[], Settings] = get_settings,
 
         d = video_dir(slug)
         asset = next((a for a in (read_assets(d) or []) if a.scene_id == scene_id), None)
-        if asset is None or not asset.path or not (d / asset.path).exists():
+        src = (d / asset.path).resolve() if asset and asset.path else None
+        if src is None or not src.is_relative_to(d.resolve()) or not src.exists():
             raise HTTPException(404)
         key = hashlib.sha1(f"{asset.path}|{asset.uid}".encode()).hexdigest()[:10]
         thumb = d / "thumbs" / f"scene_{scene_id:03d}_{key}.jpg"
         if not thumb.exists():
             thumb.parent.mkdir(exist_ok=True)
-            seek = ["-ss", "0.5"] if asset.kind == "video" else []
-            ffmpeg.run([*seek, "-i", str(d / asset.path), "-frames:v", "1", "-vf", "scale=240:-2", str(thumb)])
+            try:  # seek into videos for a representative frame; very short clips fall back to frame 0
+                for seek in ((["-ss", "0.5"] if asset.kind == "video" else []), []):
+                    ffmpeg.run([*seek, "-i", str(src), "-frames:v", "1", "-vf", "scale=240:-2", str(thumb)])
+                    if thumb.exists():
+                        break
+            except (ffmpeg.FFmpegError, OSError):
+                pass
+            if not thumb.exists():
+                raise HTTPException(404)
         return FileResponse(thumb, media_type="image/jpeg")
 
     # --- settings ---------------------------------------------------------------------------

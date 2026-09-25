@@ -86,3 +86,14 @@ def test_new_output_dir_suffixes_collisions(tmp_path, monkeypatch):
     b = pipeline.new_output_dir("Bí ẩn tam giác Bermuda", s, date(2026, 9, 25))
     assert a.name == "bi-an-tam-giac-bermuda-260925"
     assert b.name == "bi-an-tam-giac-bermuda-260925-2"
+
+
+def test_write_script_drops_everything_built_from_the_old_script(tmp_path, monkeypatch):
+    """Regenerating (e.g. after "Chọn góc khác") must not leave the old voice/clips/video behind:
+    write_script records the new hash itself, so run_stages could not notice the change."""
+    for name in ("timeline.json", "assets.json", "final.mp4", "metadata.json", "voice.wav"):
+        (tmp_path / name).write_text("old")
+    (tmp_path / "state.json").write_text('{"topic": "t", "format": "short", "lang": "vi"}')
+    monkeypatch.setattr(pipeline, "_script", lambda job, fmt, lang: write_script(tmp_path, "Mới."))
+    pipeline.write_script(tmp_path, get_settings())
+    assert [p.name for p in tmp_path.iterdir() if p.name not in ("script.json", "state.json")] == []

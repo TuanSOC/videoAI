@@ -23,6 +23,7 @@ MIN_SHORT_SIDE = 720
 
 
 MAX_ALTERNATES = 3
+MAX_REJECTED = 50
 
 
 class SwapError(RuntimeError):
@@ -121,7 +122,8 @@ class Selector:
                         else client.photos(query, self.orientation)
                 except httpx.HTTPError as e:
                     log.warning("%s search failed for %r: %s", client.source, query, e)
-            ranked = sorted((c for c in candidates if c.uid not in self.used),
+            # compare page urls too: assets saved before uids existed only carry the url
+            ranked = sorted((c for c in candidates if c.uid not in self.used and c.page_url not in self.used),
                             key=lambda c: score(c, self.orientation, seconds), reverse=True)
             while ranked:
                 best, ranked = ranked[0], ranked[1:]
@@ -150,19 +152,21 @@ class Selector:
         """Another clip for one scene, never one already used anywhere in the video.
         No query: next saved alternate, else a fresh search on the scene's query. Query: search it."""
         self.visuals_dir.mkdir(parents=True, exist_ok=True)
-        self.used = set(used) | ({current.uid} if current.uid else set())
+        # never offer back the current clip nor any clip already swapped away from this scene
+        self.used = set(used) | {current.uid, current.url, *current.rejected} - {""}
+        rejected = (current.rejected + [current.ident])[-MAX_REJECTED:] if current.ident else current.rejected
+        asset = None
         if not query:
-            pending = [a for a in current.alternates if a.uid not in self.used]
-            while pending:
+            pending = [a for a in current.alternates if a.uid not in self.used and a.page_url not in self.used]
+            while pending and asset is None:
                 alt, pending = pending[0], pending[1:]
                 asset = self._use(scene, alt, current.query or scene.visual_query, pending)
-                if asset:
-                    return asset
         for kind in ("video", "image"):
-            asset = self._stock(scene, seconds, kind, query or current.query or scene.visual_query)
-            if asset:
-                return asset
-        raise SwapError("Không tìm được clip khác — thử từ khóa khác")
+            if asset is None:
+                asset = self._stock(scene, seconds, kind, query or current.query or scene.visual_query)
+        if asset is None:
+            raise SwapError("Không tìm được clip khác — thử từ khóa khác")
+        return asset.model_copy(update={"rejected": rejected})
 
 
 def stock_clients(s: Settings) -> list[StockClient]:

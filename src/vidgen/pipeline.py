@@ -172,7 +172,10 @@ def init_video(topic: str, fmt: str, lang: str, s: Settings) -> Path:
 
 
 def write_script(out_dir: Path, s: Settings) -> None:
-    """(Re)generate script.json from the topic/format/lang recorded by init_video."""
+    """(Re)generate script.json from the topic/format/lang recorded by init_video.
+    Everything built from a previous script (voice, clips, video, metadata) is dropped first:
+    the new hash is recorded below, so run_stages could not detect the change on its own."""
+    invalidate_from(out_dir, "voice")
     state = _load_state(out_dir)
     t = time.time()
     _script(Job(out_dir, s, state["topic"]), state["format"], state["lang"])
@@ -271,7 +274,8 @@ def swap_clip(out_dir: Path, s: Settings, scene_id: int, query: str | None = Non
         raise KeyError(f"scene {scene_id} not found")
     seconds = next((sa.duration for sa in Job(out_dir, s).read_timeline().scenes if sa.scene_id == scene_id), 5.0)
     selector = Selector(stock_clients(s), None, s.preset(script.format), out_dir, s.path(s.pipeline.cache_dir))
-    new = selector.swap(scene, seconds, current, {a.uid for a in assets if a.uid}, query)
+    used = {x for a in assets for x in (a.uid, a.url) if x}
+    new = selector.swap(scene, seconds, current, used, query)
 
     if current.path and current.path != new.path:
         (out_dir / current.path).unlink(missing_ok=True)

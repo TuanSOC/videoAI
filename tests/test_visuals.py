@@ -265,3 +265,21 @@ def test_metadata_rebuild_refreshes_credits_without_llm():
     meta = rebuild_description(old, script, new_assets)
     assert meta.summary == "Tóm tắt." and meta.credits == ["Pixabay by Bo: u9"]
     assert "u1" not in meta.description and meta.description.endswith("#x #shorts")
+
+
+def test_swap_never_cycles_back_to_rejected_clips(tmp_path, fake_download):
+    stock = FakeStock(videos={"stormy ocean aerial": [cand("a"), cand("b")]})
+    s = make_selector(tmp_path, [stock])
+    first = s.pick(scene(1), 5)                      # a (alternate: b)
+    second = s.swap(scene(1), 5, first, used={"a"})  # b
+    assert second.uid == "b" and second.rejected == ["a"]
+    with pytest.raises(sel.SwapError):               # only a and b exist: a was rejected
+        s.swap(scene(1), 5, second, used={"b"})
+
+
+def test_swap_on_old_assets_excludes_by_page_url(tmp_path, fake_download):
+    stock = FakeStock(videos={"stormy ocean aerial": [cand("a"), cand("b")]})
+    s = make_selector(tmp_path, [stock])
+    old = Asset(scene_id=1, path="visuals/scene_001.mp4", kind="video", source="pexels", url="https://page/a")
+    new = s.swap(scene(1), 5, old, used={"https://page/a"})  # pre-uid asset: only the url is known
+    assert new.uid == "b"

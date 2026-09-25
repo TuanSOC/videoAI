@@ -389,3 +389,48 @@ def test_swap_needs_rendered_clips_and_known_scene(env):
     assert client.post(f"/api/videos/{slug}/scenes/1/swap", json={}).status_code == 409
     slug2, _ = rendered_video(client, jobs, s)
     assert client.post(f"/api/videos/{slug2}/scenes/99/swap", json={}).status_code == 404
+
+
+# --- review fixes -------------------------------------------------------------------------------
+def test_resume_auto_job_after_script_only_renders(env):
+    client, jobs, calls, s = env
+    slug = create(client, jobs)
+    d = s.pipeline.output_dir / slug
+    (d / "job.json").write_text(json.dumps({"slug": slug, "kind": "brief", "status": "running",
+                                            "stages": {"brief": "done", "script": "done", "voice": "run"},
+                                            "options": {"then_render": True}}), encoding="utf-8")
+    from vidgen.web.app import create_app
+    fresh, scripts, renders = JobQueue(), [], []
+    app2 = TestClient(create_app(settings=lambda: s, jobs=fresh,
+                                 script_runner=lambda out_dir, st: scripts.append(1),
+                                 stage_runner=lambda *a, **k: renders.append(1) or {}))
+    assert app2.post(f"/api/videos/{slug}/resume").status_code == 200
+    fresh.wait_idle()
+    assert scripts == [] and renders == [1]
+
+
+def test_render_refused_while_a_swap_is_downloading(env, monkeypatch):
+    import threading
+    client, jobs, _, s = env
+    slug, d = rendered_video(client, jobs, s)
+    from vidgen import pipeline
+    started, release = threading.Event(), threading.Event()
+
+    def slow_swap(*a, **k):
+        started.set()
+        release.wait(5)
+        from vidgen.models import Asset
+        return Asset(scene_id=1, path="visuals/scene_001.mp4", kind="video", source="pexels")
+
+    monkeypatch.setattr(pipeline, "swap_clip", slow_swap)
+    t = threading.Thread(target=lambda: client.post(f"/api/videos/{slug}/scenes/1/swap", json={}))
+    t.start()
+    assert started.wait(5)
+    try:
+        assert client.post(f"/api/videos/{slug}/render", json={}).status_code == 409
+        assert client.post(f"/api/videos/{slug}/scenes/2/swap", json={}).status_code == 409
+    finally:
+        release.set()
+        t.join()
+    assert client.post(f"/api/videos/{slug}/render", json={}).status_code == 200
+    jobs.wait_idle()

@@ -13,6 +13,7 @@ const VTYPES = { stock: "Stock", ai_image: "Ảnh AI", ai_video: "Video AI" };
 let pollTimer = null;
 
 // ---------- helpers ----------
+const safeUrl = (u) => (/^https?:\/\//i.test(String(u ?? "")) ? esc(u) : "#");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
@@ -48,7 +49,7 @@ function ago(ts) {
 
 const fmtSec = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
 const words = (t) => (t.trim() ? t.trim().split(/\s+/).length : 0);
-const pill = (status) => `<span class="pill st-${status}"><span class="dot"></span>${STATUS[status] || status}</span>`;
+const pill = (status) => `<span class="pill st-${esc(status)}"><span class="dot"></span>${esc(STATUS[status] || status)}</span>`;
 
 function stopPolling() { clearTimeout(pollTimer); pollTimer = null; }
 function poll(fn, ms) { stopPolling(); pollTimer = setTimeout(fn, ms); }
@@ -171,7 +172,7 @@ function clipHtml(s) {
   const thumb = a.has_file
     ? `<img class="clip-thumb" src="/media/${clipCtx.slug}/scenes/${s.id}.jpg?k=${a.key}" alt="" loading="lazy">`
     : `<div class="clip-thumb empty-thumb">màu</div>`;
-  const src = a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.source)}${a.author ? ` · ${esc(a.author)}` : ""}</a>`
+  const src = a.url ? `<a href="${safeUrl(a.url)}" target="_blank" rel="noopener">${esc(a.source)}${a.author ? ` · ${esc(a.author)}` : ""}</a>`
     : esc(a.source);
   return `
     <div class="clip">${thumb}
@@ -307,8 +308,8 @@ function renderBrief(v) {
   const sourceRow = (s) => `
     <label class="src">
       <input type="checkbox" data-url="${esc(s.url)}" ${excluded.has(s.url) ? "" : "checked"}>
-      <div><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>
-        <span class="meta">${s.lang}.wikipedia · ${s.chars} ký tự</span>
+      <div><a href="${safeUrl(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>
+        <span class="meta">${esc(s.lang)}.wikipedia · ${s.chars} ký tự</span>
         <div class="src-preview">${esc(s.text)}${s.chars > s.text.length ? "…" : ""}</div></div>
     </label>`;
   // sources are researched once per topic and shared by the angles; union keeps older per-angle briefs working
@@ -383,7 +384,7 @@ function renderScenes(lang, active, job) {
     ${lengthBar(total)}
     ${draft.sources?.length
       ? `<div class="sources">Dữ kiện lấy từ: ${draft.sources.map((s) =>
-          `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>`).join(" · ")}
+          `<a href="${safeUrl(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>`).join(" · ")}
           — vẫn nên đối chiếu trước khi render.</div>`
       : `<div class="sources warn">Không tìm được nguồn tham khảo — hãy kiểm tra kỹ các dữ kiện trong kịch bản.</div>`}
     ${draft.scenes.map((s, i) => {
