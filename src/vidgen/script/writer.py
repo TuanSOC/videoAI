@@ -17,6 +17,7 @@ WORDS_PER_SECOND = {"vi": 3.3, "en": 2.5}
 MAX_SCENE_WORDS = 25
 MIN_SCENE_WORDS = 5
 SECONDS_PER_CHAPTER = 90
+MIN_LENGTH_RATIO = 0.8  # below this share of the target word count, request one longer draft
 
 
 # --- LLM response schemas (ids and chapter tags are assigned here, not by the model) ---
@@ -69,12 +70,30 @@ def generate(topic: str, fmt: Format, lang: Lang, preset: FormatPreset, llm: LLM
                   scenes=postprocess(scenes, preset.max_ai_video))
 
 
+def _draft_words(draft) -> int:
+    return sum(len(s.narration.split()) for s in draft.scenes)
+
+
+def _generate_with_length(llm: LLMChain, prompt: str, schema, target_words: int):
+    """Small local models under-write. If a draft is under MIN_LENGTH_RATIO of the target,
+    ask once more with concrete feedback and keep the longer draft."""
+    draft = llm.generate(prompt, schema)
+    got = _draft_words(draft)
+    if got >= target_words * MIN_LENGTH_RATIO:
+        return draft
+    feedback = (f"\n\nIMPORTANT: a previous draft had only {got} words, far too short. "
+                f"Write at least {target_words} words: add more scenes with more concrete facts. "
+                "Do not pad with filler or repeat sentences.")
+    retry = llm.generate(prompt + feedback, schema)
+    return retry if _draft_words(retry) > got else draft
+
+
 def _generate_short(topic, lang, preset, llm, seconds, words):
     prompt = _render(
         "short.md", topic=topic, lang_name=LANG_NAMES[lang], target_words=words,
         target_seconds=seconds, scene_range="8-14", max_ai_video=preset.max_ai_video,
     )
-    draft = llm.generate(prompt, ShortDraft)
+    draft = _generate_with_length(llm, prompt, ShortDraft, words)
     return draft.title, draft.hook, [Scene(id=0, **s.model_dump()) for s in draft.scenes]
 
 
@@ -96,13 +115,14 @@ def _generate_long(topic, lang, preset, llm, seconds, words):
             note = "This is the final chapter: wrap up the story and end with a question inviting comments."
         else:
             note = "Continue smoothly from the previous chapter; no greetings or recaps."
-        draft = llm.generate(
+        draft = _generate_with_length(
+            llm,
             _render("long_chapter.md", title=outline.title, outline=outline_text, chapter_index=i,
                     chapter_count=len(outline.chapters), chapter_title=ch.title,
                     chapter_summary=ch.summary, position_note=note, lang_name=LANG_NAMES[lang],
                     # spread the AI-video budget: one slot per chapter for the first N chapters
                     target_words=per_chapter, max_ai_video=1 if i <= preset.max_ai_video else 0),
-            ChapterDraft,
+            ChapterDraft, per_chapter,
         )
         scenes += [Scene(id=0, chapter=ch.title, **s.model_dump()) for s in draft.scenes]
     return outline.title, outline.hook, scenes

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from vidgen.fsutil import write_atomic
 from vidgen.models import Asset, Script
 from vidgen.script.llm import LLMChain
 from vidgen.script.writer import LANG_NAMES
@@ -90,4 +91,4 @@ def generate_metadata(script: Script, assets: list[Asset], llm: LLMChain) -> Met
 
 
 def save_metadata(meta: Metadata, out: Path) -> None:
-    out.write_text(meta.model_dump_json(indent=2), encoding="utf-8")
+    write_atomic(out, meta.model_dump_json(indent=2))

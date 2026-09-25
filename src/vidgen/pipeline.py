@@ -17,6 +17,7 @@ from pydantic import TypeAdapter
 from slugify import slugify
 
 from vidgen.config import Settings
+from vidgen.fsutil import write_atomic
 from vidgen.models import Asset, Script, Timeline
 
 log = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ def _script(job: Job, fmt: str = "short", lang: str = "vi") -> None:
 
     s = job.settings
     script = generate(job.topic, fmt, lang, s.preset(fmt), default_chain(s))
-    (job.out_dir / "script.json").write_text(script.model_dump_json(indent=2), encoding="utf-8")
+    write_atomic(job.out_dir / "script.json", script.model_dump_json(indent=2))
 
 
 def _voice(job: Job) -> None:
@@ -69,7 +70,7 @@ def _visuals(job: Job) -> None:
     script = job.read_script()
     assets = source_visuals(script, job.read_timeline(), job.settings.preset(script.format),
                             job.out_dir, job.settings)
-    (job.out_dir / "assets.json").write_bytes(ASSETS.dump_json(assets, indent=2))
+    write_atomic(job.out_dir / "assets.json", ASSETS.dump_json(assets, indent=2))
 
 
 def _render(job: Job) -> None:
@@ -110,7 +111,7 @@ def _load_state(out_dir: Path) -> dict:
 
 
 def _save_state(out_dir: Path, state: dict) -> None:
-    (out_dir / "state.json").write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+    write_atomic(out_dir / "state.json", json.dumps(state, indent=2, ensure_ascii=False))
 
 
 def invalidate_from(out_dir: Path, stage: str) -> list[str]:

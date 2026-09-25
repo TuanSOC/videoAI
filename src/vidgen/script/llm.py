@@ -50,9 +50,10 @@ class GeminiProvider:
 class OllamaProvider:
     name = "ollama"
 
-    def __init__(self, url: str, model: str):
+    def __init__(self, url: str, model: str, think: bool = False):
         self._url = url.rstrip("/")
         self._model = model
+        self._think = think
 
     def generate_json(self, prompt: str, schema: type[BaseModel]) -> str:
         resp = httpx.post(
@@ -61,12 +62,18 @@ class OllamaProvider:
                 "model": self._model,
                 "messages": [{"role": "user", "content": prompt}],
                 "format": schema.model_json_schema(),
+                "think": self._think,
                 "stream": False,
-                "options": {"temperature": 0.8, "num_ctx": 16384},
+                # 8k context: prompts are <3k tokens; 16k would push an 8B model past 8GB VRAM
+                "options": {"temperature": 0.8, "num_ctx": 8192},
             },
-            timeout=600,
+            timeout=900,
         )
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            detail = resp.json().get("error", resp.text) if resp.headers.get("content-type", "").startswith(
+                "application/json") else resp.text
+            hint = f" — run: ollama pull {self._model}" if "not found" in str(detail) else ""
+            raise LLMError(f"Ollama {resp.status_code}: {detail}{hint}")
         return resp.json()["message"]["content"]
 
 
@@ -75,7 +82,7 @@ class LLMChain:
 
     def __init__(self, providers: list[LLMProvider], retries: int = 2):
         if not providers:
-            raise LLMError("No LLM provider configured: set GEMINI_API_KEY or run Ollama")
+            raise LLMError("No LLM provider configured: check llm.providers in config.yaml")
         self.providers = providers
         self.retries = retries
 
@@ -97,8 +104,12 @@ class LLMChain:
 
 
 def default_chain(s: Settings) -> LLMChain:
+    """Providers in config order (`llm.providers`). Gemini is skipped when no key is set."""
+    cfg = s.pipeline.llm
     providers: list[LLMProvider] = []
-    if s.secrets.gemini_api_key:
-        providers.append(GeminiProvider(s.secrets.gemini_api_key, s.pipeline.llm.gemini_model))
-    providers.append(OllamaProvider(s.secrets.ollama_url, s.pipeline.llm.ollama_model))
+    for name in cfg.providers:
+        if name == "ollama":
+            providers.append(OllamaProvider(s.secrets.ollama_url, cfg.ollama_model, cfg.ollama_think))
+        elif name == "gemini" and s.secrets.gemini_api_key:
+            providers.append(GeminiProvider(s.secrets.gemini_api_key, cfg.gemini_model))
     return LLMChain(providers)

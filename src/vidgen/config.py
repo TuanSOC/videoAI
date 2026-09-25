@@ -27,8 +27,10 @@ class FormatPreset(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    gemini_model: str = "gemini-flash-latest"
-    ollama_model: str = "qwen2.5:7b"
+    providers: list[Literal["ollama", "gemini"]] = ["ollama"]
+    ollama_model: str = "qwen3:8b"
+    ollama_think: bool = False
+    gemini_model: str = "gemini-2.5-flash"
 
 
 class WhisperConfig(BaseModel):

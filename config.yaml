@@ -20,8 +20,11 @@ voices:
   en: en-US-AndrewMultilingualNeural
 
 llm:
+  # tried in order; "gemini" may bill once its free quota is exceeded, so it's off by default
+  providers: [ollama]
+  ollama_model: qwen3:8b
+  ollama_think: false   # qwen3 "thinking" is slow and not needed for JSON scripts
   gemini_model: gemini-2.5-flash
-  ollama_model: qwen2.5:7b
 
 ai:
   # sizes/frames tuned for 8GB VRAM; raise on a bigger GPU

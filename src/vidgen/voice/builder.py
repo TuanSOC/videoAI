@@ -13,6 +13,7 @@ from pydantic import TypeAdapter
 
 from vidgen import ffmpeg
 from vidgen.config import Settings
+from vidgen.fsutil import write_atomic
 from vidgen.models import SceneAudio, Script, Timeline, WordTiming
 from vidgen.voice.tts import TTSError, synth_edge
 
@@ -93,5 +94,5 @@ def generate_voice(script: Script, out_dir: Path, s: Settings,
     ffmpeg.run(["-f", "concat", "-safe", "0", "-i", "concat.txt", "-c", "copy", "../voice.wav"], cwd=voice_dir)
 
     timeline = build_timeline(ids, wav_names, durations, words)
-    (out_dir / "timeline.json").write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
+    write_atomic(out_dir / "timeline.json", timeline.model_dump_json(indent=2))
     return timeline

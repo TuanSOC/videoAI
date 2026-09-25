@@ -18,7 +18,8 @@ class FakeProvider:
 
     def generate_json(self, prompt, schema):
         self.prompts.append(prompt)
-        r = self.responses.pop(0)
+        # the last queued response repeats, so extra length-retry calls get an answer too
+        r = self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
         if isinstance(r, Exception):
             raise r
         return r if isinstance(r, str) else json.dumps(r)
@@ -105,11 +106,35 @@ def test_generate_long_outline_then_chapters():
     script = writer.generate("Silk road", "long", "en", preset, LLMChain([fake]))
     assert script.scenes[0].chapter == "Intro"
     assert len(script.scenes) == 1 + 3 * 2
-    assert len(fake.prompts) == 4
-    assert "final chapter" in fake.prompts[-1]
+    chapter_prompts = [p for p in fake.prompts if "Write chapter" in p]
+    first_tries = [p for p in chapter_prompts if "far too short" not in p]
+    assert len(first_tries) == 3
+    assert "final chapter" in first_tries[-1]
     # max_ai_video=2 → chapters 1-2 get one slot, chapter 3 gets none
-    assert "in this chapter: 1" in fake.prompts[1]
-    assert "in this chapter: 0" in fake.prompts[3]
+    assert "in this chapter: 1" in first_tries[0]
+    assert "in this chapter: 0" in first_tries[2]
+
+
+def test_short_draft_retried_once_when_too_short():
+    long_scene = scene(" ".join(["từ"] * 20) + ".")
+    long_draft = {"title": "t", "hook": "h", "scenes": [long_scene] * 12}  # 240 words
+    fake = FakeProvider("fake", [SHORT, long_draft])
+    script = writer.generate("x", "short", "vi", get_settings().preset("short"), LLMChain([fake]))
+    assert len(fake.prompts) == 2 and "far too short" in fake.prompts[1]
+    assert script.word_count == 240
+
+
+def test_short_draft_keeps_first_when_retry_is_not_longer():
+    fake = FakeProvider("fake", [SHORT])  # retry returns the same short draft
+    script = writer.generate("x", "short", "vi", get_settings().preset("short"), LLMChain([fake]))
+    assert len(fake.prompts) == 2 and script.title == "Bermuda"
+
+
+def test_long_enough_draft_is_not_retried():
+    long_draft = {"title": "t", "hook": "h", "scenes": [scene(" ".join(["từ"] * 20) + ".")] * 12}
+    fake = FakeProvider("fake", [long_draft])
+    writer.generate("x", "short", "vi", get_settings().preset("short"), LLMChain([fake]))
+    assert len(fake.prompts) == 1
 
 
 def test_chain_retries_invalid_json_then_falls_back():

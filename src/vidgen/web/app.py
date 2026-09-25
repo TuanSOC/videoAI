@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from vidgen import pipeline
 from vidgen.config import SECRET_KEYS, Settings, get_settings, update_env_file
+from vidgen.fsutil import write_atomic
 from vidgen.models import Script
 from vidgen.web.jobs import JobQueue, JobStatus
 
@@ -148,7 +149,7 @@ def create_app(settings: Callable[[], Settings] = get_settings,
             raise HTTPException(422, e.errors(include_url=False)) from e
         # renumber so ids stay 1..n after the user adds/removes scenes
         script.scenes = [sc.model_copy(update={"id": i}) for i, sc in enumerate(script.scenes, 1)]
-        (d / "script.json").write_text(script.model_dump_json(indent=2), encoding="utf-8")
+        write_atomic(d / "script.json", script.model_dump_json(indent=2))
         return {"ok": True, "scenes": len(script.scenes)}
 
     @app.post("/api/videos/{slug}/render")
