@@ -1,7 +1,7 @@
 ---
 phase: 3
 title: Brief Step and Multi-Topic
-status: in-progress
+status: completed
 priority: P1
 effort: 1d
 dependencies:
