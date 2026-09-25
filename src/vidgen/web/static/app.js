@@ -87,8 +87,10 @@ async function watchJobs() {
       watching.delete(slug);
       const v = videos.find((x) => x.slug === slug);
       if (!v) continue;
-      const what = v.job_kind === "brief" && v.status !== "error"
-        ? "Đã có 3 góc khai thác mới" : DONE_TEXT[v.status] || "Đã xong";
+      // a brief job that stopped at angles (new video, or new angles for an existing script);
+      // auto flows are brief jobs too but end at a video, and errors/interruptions keep their text
+      const anglesOnly = v.job_kind === "brief" && (v.status === "brief" || v.status === "review");
+      const what = anglesOnly ? "Đã có 3 góc khai thác mới" : DONE_TEXT[v.status] || "Đã xong";
       const text = `${what}: ${title}`;
       toast(text, v.status === "error" ? "error" : "");
       if ("Notification" in window && Notification.permission === "granted" && document.hidden) {

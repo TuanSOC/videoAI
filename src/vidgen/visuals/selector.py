@@ -58,18 +58,22 @@ SUBJECT_SHARE = 0.4  # a word in ≥40% of the scenes' queries is what the video
 
 
 def stem(w: str) -> str:
-    """Crude, idempotent match key: singular and plural fold together (octopus/octopuses → octopus,
-    house/houses → hous, cave/caves → cav, box/boxes → box). Only compared, never shown or searched."""
+    """Idempotent singular form used as a match key: octopuses→octopus, buses→bus, houses→house,
+    caves→cave, boxes→box, bodies→body. No trailing-"e" stripping: it merged car/care, plan/plane."""
     if len(w) <= 3:
         return w
     if w.endswith("ies") and len(w) > 4:
-        w = w[:-3] + "y"
-    elif w.endswith("es") and w[:-2].endswith(("s", "x", "z", "ch", "sh")):
-        w = w[:-2]
-    elif w.endswith("s") and not w.endswith(("ss", "us", "is")):
-        w = w[:-1]
-    if w.endswith("e") and len(w) > 3:  # house/houses both end up "hous"
-        w = w[:-1]
+        return w[:-3] + "y"
+    if w.endswith("es"):
+        base = w[:-2]
+        # "-uses": a consonant before "us" means the singular ends in -us (octop-us, b-us, vir-us);
+        # a vowel means it ends in -use (ho-use, ca-use, pa-use)
+        if base.endswith(("ss", "x", "z", "ch", "sh")) or (
+                base.endswith("us") and len(base) >= 3 and base[-3] not in "aeiou"):
+            return base
+        return w[:-1]
+    if w.endswith("s") and not w.endswith(("ss", "us", "is")):
+        return w[:-1]
     return w
 
 
@@ -91,7 +95,8 @@ def video_subject(queries: list[str]) -> str | None:
 OFF_CONTEXT = {stem(w) for w in """dish dishes food meal plate cooking cooked cook grilled fried recipe
     restaurant menu seafood market sushi sculpture statue toy toys kite kites cartoon illustration drawing
     painting logo icon animation animated case costume plush sticker helmet eating pizza drinking party
-    dj dancing wedding""".split()}
+    dj dancing wedding keychain keyring jewelry jewellery necklace earring pendant tattoo mug shirt
+    print poster""".split()}
 
 
 def relevance(c: Candidate, query_words: set[str], subject: str | None) -> int:
@@ -115,10 +120,13 @@ def fallback_queries(query: str, subject: str | None = None) -> list[str]:
     out = list(parts)
     words = parts[0].split()
     if subject:
-        # search with real words (stems like "cav" are only match keys)
-        subject_word = next((w.lower() for w in words if stem(w.lower()) == subject), subject)
+        # search with the words as written, punctuation stripped ("caves." → "caves"); the subject
+        # may sit after a comma. stem() yields real singular words, so it is a safe last resort.
+        tokens = [t.lower() for t in re.findall(r"[A-Za-z]+", query)]
+        first_tokens = [t.lower() for t in re.findall(r"[A-Za-z]+", parts[0])]
+        subject_word = next((t for t in tokens if stem(t) == subject), subject)
         others = content_words(parts[0]) - {subject}
-        last = next((w.lower() for w in reversed(words) if stem(w.lower()) in others), None)
+        last = next((t for t in reversed(first_tokens) if stem(t) in others), None)
         if last:
             out.append(f"{subject_word} {last}")
         out.append(subject_word)

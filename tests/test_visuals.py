@@ -294,9 +294,19 @@ def test_stem_is_idempotent():
     for w in ("octopus", "octopuses", "caves", "cave", "bodies", "glass", "houses", "boxes", "images"):
         assert sel.stem(sel.stem(w)) == sel.stem(w)
     for a, b in [("octopuses", "octopus"), ("caves", "cave"), ("houses", "house"), ("pauses", "pause"),
-                 ("boxes", "box"), ("buses", "bus"), ("images", "image"), ("bodies", "body")]:
-        assert sel.stem(a) == sel.stem(b), (a, b)
-    assert sel.stem("octopus") == "octopus"
+                 ("boxes", "box"), ("buses", "bus"), ("images", "image"), ("bodies", "body"),
+                 ("glasses", "glass"), ("viruses", "virus")]:
+        assert sel.stem(a) == sel.stem(b) == b, (a, b)   # the key is the real singular word
+    for a, b in [("car", "care"), ("plan", "plane"), ("fir", "fire"), ("hat", "hate")]:
+        assert sel.stem(a) != sel.stem(b), (a, b)        # different words must not merge
+
+
+def test_fallback_queries_use_real_words_even_after_commas_and_punctuation():
+    q = "deep sea footage, octopus hiding in caves."
+    subject = sel.stem("octopus")
+    out = sel.fallback_queries(q, subject)
+    assert "octopus" in out and all(t.isalpha() or " " in t or "," in t for t in out)
+    assert sel.fallback_queries("octopus in caves.", "octopus")[1:] == ["octopus caves", "octopus"]
 
 
 def test_video_subject():
