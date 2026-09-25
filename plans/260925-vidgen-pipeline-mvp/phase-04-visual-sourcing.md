@@ -1,10 +1,11 @@
 ---
 phase: 4
-title: "Visual Sourcing"
-status: pending
+title: Visual Sourcing
+status: in-progress
 priority: P1
-effort: "2d"
-dependencies: [2]
+effort: 2d
+dependencies:
+  - 2
 ---
 
 # Phase 4: Visual Sourcing
@@ -52,6 +53,13 @@ Wan 2.2 cost: ~3-8 min/clip on 12GB → hard cap per format (config `max_ai_vide
 - [ ] AI video path produces a clip when ComfyUI up; degrades gracefully when down
 - [ ] `assets.json` includes license/author for every stock asset
 - [ ] No watermarked assets (Pexels/Pixabay are watermark-free)
+
+## Implementation Notes (code done, live test pending keys + ComfyUI)
+- Unit-tested with mocked HTTP: Pexels/Pixabay parsing, variant pick (≤1920px), search cache, scoring, dedupe, query shortening, AI budget + fallbacks, ComfyUI queue/poll/download/error.
+- Live-verified: no keys + ComfyUI offline → clean placeholder degradation.
+- Downloads cached in `cache/files/`, hard-linked into `output/<slug>/visuals/`.
+- ComfyUI workflow JSONs follow official Flux-schnell / Wan 2.2 5B templates with GGUF loaders (needs ComfyUI-GGUF custom node). UNVERIFIED until ComfyUI installed; model filenames in JSON must match user's files.
+- AI sizes in config `ai:` tuned for 8GB: Flux 768x1344, Wan 544x960 x 81 frames.
 
 ## Risk Assessment
 - Poor stock relevance for abstract topics → LLM gives concrete queries; allow user edit of `visual_query` in review step.

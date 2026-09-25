@@ -23,6 +23,13 @@ llm:
   gemini_model: gemini-flash-latest
   ollama_model: qwen2.5:7b
 
+ai:
+  # sizes/frames tuned for 8GB VRAM; raise on a bigger GPU
+  image_size: {short: [768, 1344], long: [1344, 768]}
+  video_size: {short: [544, 960], long: [960, 544]}
+  video_frames: 81     # Wan 2.2 at 24fps ≈ 3.4s; longer scenes loop the clip
+  timeout_seconds: 1800
+
 whisper:
   model: small
   device: cuda

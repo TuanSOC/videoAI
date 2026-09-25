@@ -44,7 +44,7 @@ Key decisions:
 | 1 | [Project Setup](./phase-01-project-setup.md) | Completed |
 | 2 | [Script Generation](./phase-02-script-generation.md) | In Progress |
 | 3 | [Voice and Timing](./phase-03-voice-and-timing.md) | Completed |
-| 4 | [Visual Sourcing](./phase-04-visual-sourcing.md) | Pending |
+| 4 | [Visual Sourcing](./phase-04-visual-sourcing.md) | In Progress |
 | 5 | [Video Assembly](./phase-05-video-assembly.md) | Completed |
 | 6 | [CLI and Review Flow](./phase-06-cli-and-review-flow.md) | Completed |
 | 7 | [End-to-End Testing](./phase-07-end-to-end-testing.md) | Pending |

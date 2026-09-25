@@ -37,12 +37,20 @@ class WhisperConfig(BaseModel):
     compute_type: str = "float16"
 
 
+class AIConfig(BaseModel):
+    image_size: dict[str, tuple[int, int]] = {"short": (768, 1344), "long": (1344, 768)}
+    video_size: dict[str, tuple[int, int]] = {"short": (544, 960), "long": (960, 544)}
+    video_frames: int = 81
+    timeout_seconds: int = 1800
+
+
 class PipelineConfig(BaseModel):
     output_dir: Path = Path("output")
     cache_dir: Path = Path("cache")
     formats: dict[str, FormatPreset]
     voices: dict[str, str]
     llm: LLMConfig = LLMConfig()
+    ai: AIConfig = AIConfig()
     whisper: WhisperConfig = WhisperConfig()
 
 
