@@ -103,6 +103,7 @@ class Alternate(BaseModel):
     author: str
     source: str
     license: str
+    text: str = ""  # clip description, for relevance when swapping
 
 
 class Asset(BaseModel):

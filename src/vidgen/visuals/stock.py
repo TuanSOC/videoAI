@@ -11,7 +11,7 @@ from pathlib import Path
 import httpx
 
 log = logging.getLogger(__name__)
-PER_PAGE = 15
+PER_PAGE = 30  # a video about one subject needs many distinct clips of it
 MAX_DIM = 1920  # skip 4K variants: slower to download and decode, no visible gain at 1080p
 
 
@@ -27,6 +27,13 @@ class Candidate:
     author: str
     source: str
     license: str
+    text: str = ""    # what the clip shows (Pexels page slug / alt text, Pixabay tags) for relevance
+
+
+def slug_text(page_url: str) -> str:
+    """Pexels page urls describe the clip: /video/aerial-view-of-rough-ocean-waves-31755232/."""
+    slug = page_url.rstrip("/").rsplit("/", 1)[-1]
+    return " ".join(w for w in slug.split("-") if not w.isdigit())
 
 
 class StockClient:
@@ -91,7 +98,7 @@ class Pexels(StockClient):
                 out.append(Candidate(f"pexels:v{v['id']}", "video", f["link"], v.get("url", ""),
                                      f["width"] or v["width"], f["height"] or v["height"],
                                      float(v.get("duration") or 0), v.get("user", {}).get("name", ""),
-                                     self.source, self.license))
+                                     self.source, self.license, slug_text(v.get("url", ""))))
         return out
 
     def photos(self, query, orientation):
@@ -99,7 +106,8 @@ class Pexels(StockClient):
                          {"query": query, "orientation": orientation, "per_page": PER_PAGE},
                          self._headers())
         return [Candidate(f"pexels:p{p['id']}", "image", p["src"]["large2x"], p.get("url", ""),
-                          p["width"], p["height"], 0.0, p.get("photographer", ""), self.source, self.license)
+                          p["width"], p["height"], 0.0, p.get("photographer", ""), self.source, self.license,
+                          f'{p.get("alt") or ""} {slug_text(p.get("url", ""))}'.strip())
                 for p in data.get("photos", [])]
 
 
@@ -116,7 +124,7 @@ class Pixabay(StockClient):
             if f:
                 out.append(Candidate(f"pixabay:v{h['id']}", "video", f["url"], h.get("pageURL", ""),
                                      f["width"], f["height"], float(h.get("duration") or 0),
-                                     h.get("user", ""), self.source, self.license))
+                                     h.get("user", ""), self.source, self.license, h.get("tags", "")))
         return out
 
     def photos(self, query, orientation):
@@ -126,7 +134,7 @@ class Pixabay(StockClient):
                           "safesearch": "true"})
         return [Candidate(f"pixabay:p{h['id']}", "image", h["largeImageURL"], h.get("pageURL", ""),
                           h.get("imageWidth", 0), h.get("imageHeight", 0), 0.0, h.get("user", ""),
-                          self.source, self.license)
+                          self.source, self.license, h.get("tags", ""))
                 for h in data.get("hits", [])]
 
 

@@ -87,7 +87,7 @@ def test_score_prefers_orientation_resolution_and_length():
 
 def test_fallback_queries():
     assert sel.fallback_queries("old ship wreck underwater") == \
-        ["old ship wreck underwater", "old ship", "underwater"]
+        ["old ship wreck underwater", "old ship", "wreck underwater"]
     assert sel.fallback_queries("ocean") == ["ocean"]
     # real Gemini output lists several ideas: each becomes its own query
     assert sel.fallback_queries("ocean map, red triangle outline, compass")[:3] == \
@@ -150,10 +150,10 @@ def test_stock_video_then_no_reuse(tmp_path, fake_download):
 
 
 def test_shorter_query_then_photo_then_placeholder(tmp_path, fake_download):
-    stock = FakeStock(videos={"aerial": [cand("v")]},
+    stock = FakeStock(videos={"ocean aerial": [cand("v")]},
                       photos={"stormy ocean aerial": [cand("p", kind="image")]})
     s = make_selector(tmp_path, [stock])
-    assert s.pick(scene(1), 5).url == "https://page/v"          # found via last-word fallback
+    assert s.pick(scene(1), 5).url == "https://page/v"          # found via last-two-words fallback
     assert s.pick(scene(2), 5).kind == "image"                   # videos exhausted → photo
     assert s.pick(scene(3), 5).kind == "color"                   # nothing left, no AI
 
@@ -283,3 +283,89 @@ def test_swap_on_old_assets_excludes_by_page_url(tmp_path, fake_download):
     old = Asset(scene_id=1, path="visuals/scene_001.mp4", kind="video", source="pexels", url="https://page/a")
     new = s.swap(scene(1), 5, old, used={"https://page/a"})  # pre-uid asset: only the url is known
     assert new.uid == "b"
+
+
+# --- relevance ------------------------------------------------------------------------------------
+def tcand(uid, text, w=1080, h=1920, dur=10.0):
+    return Candidate(uid, "video", f"https://x/{uid}.mp4", f"https://page/{uid}", w, h, dur, "a", "pexels", "L", text)
+
+
+def test_stem_is_idempotent():
+    for w in ("octopus", "octopuses", "caves", "cave", "bodies", "glass"):
+        assert sel.stem(sel.stem(w)) == sel.stem(w)
+    assert sel.stem("octopuses") == sel.stem("octopus") == "octopus"
+    assert sel.stem("caves") == "cave"
+
+
+def test_video_subject():
+    qs = ["octopus shell on rock", "diver looking for octopus", "octopus in cave", "marine ecosystem", "sand"]
+    assert sel.video_subject(qs) == "octopus"
+    assert sel.video_subject(["computer screen", "server room", "hacker typing", "data center", "laptop"]) is None
+
+
+def test_relevance_prefers_matching_description_and_requires_subject():
+    q = sel.content_words("octopus in cold water")
+    assert sel.relevance(tcand("a", "octopus swimming in cold water"), q, "octopus") == 4
+    assert sel.relevance(tcand("b", "a person cooking an octopus"), q, "octopus") == 0  # off-context
+    assert sel.relevance(tcand("b2", "octopus in aquarium"), q, "octopus") == 2
+    dish_q = sel.content_words("grilled octopus dish")
+    assert sel.relevance(tcand("b3", "grilled octopus dish"), dish_q, "octopus") == 4  # asked for
+    assert sel.relevance(tcand("c", "aerial view of cave entrances"), q, "octopus") == 0
+    assert sel.relevance(tcand("d", ""), q, "octopus") == 1  # unknown description: neutral
+
+
+def test_fallback_queries_keep_subject():
+    assert sel.fallback_queries("octopus moving between caves", "octopus") == \
+        ["octopus moving between caves", "octopus cave", "octopus"]
+
+
+def test_pick_ranks_relevance_above_technical_fit(tmp_path, fake_download):
+    stock = FakeStock(videos={"octopus in cold water": [
+        tcand("cooking", "a person cooking an octopus"),                     # perfect framing, weak match
+        tcand("swim", "octopus swimming in cold water", 1920, 1080, 2.0)]})  # landscape + short, strong match
+    s = make_selector(tmp_path, [stock])
+    s.subject = "octopus"
+    assert s.pick(scene(1, q="octopus in cold water"), 5).uid == "swim"
+
+
+def test_strict_skips_irrelevant_then_subject_only_query(tmp_path, fake_download):
+    stock = FakeStock(videos={"octopus moving between caves": [tcand("cave", "nemrut dagi cave entrances")],
+                              "octopus cave": [],
+                              "octopus": [tcand("oct", "octopus crawling on reef")]})
+    s = make_selector(tmp_path, [stock])
+    s.subject = "octopus"
+    assert s.pick(scene(1, q="octopus moving between caves"), 5).uid == "oct"
+
+
+def test_irrelevant_clip_used_only_as_last_resort(tmp_path, fake_download):
+    stock = FakeStock(videos={"octopus": [tcand("cave", "cave entrances")]})
+    s = make_selector(tmp_path, [stock])
+    s.subject = "octopus"
+    assert s.pick(scene(1, q="octopus"), 5).uid == "cave"  # better than a flat colour
+
+
+def test_judge_called_only_for_weak_matches(tmp_path, fake_download):
+    calls = []
+
+    def judge(narration, query, texts):
+        calls.append(texts)
+        return texts.index("octopus hiding in reef")
+
+    weak = FakeStock(videos={"octopus den": [tcand("tank", "octopus in aquarium"), tcand("reef", "octopus hiding in reef")]})
+    s = make_selector(tmp_path, [weak])
+    s.subject, s.judge = "octopus", judge
+    assert s.pick(scene(1, q="octopus den"), 5).uid == "reef" and len(calls) == 1
+
+    strong = FakeStock(videos={"octopus den": [tcand("den", "octopus in its den"), tcand("x", "octopus")]})
+    s2 = make_selector(tmp_path, [strong])
+    s2.subject, s2.judge = "octopus", judge
+    assert s2.pick(scene(2, q="octopus den"), 5).uid == "den" and len(calls) == 1  # no extra call
+
+
+def test_judge_rejecting_all_moves_on_to_simpler_query(tmp_path, fake_download):
+    stock = FakeStock(videos={"octopus den": [tcand("tank", "octopus in aquarium"), tcand("art", "octopus mural wall")],
+                              "octopus": [tcand("live", "octopus crawling on reef")]})
+    s = make_selector(tmp_path, [stock])
+    s.subject = "octopus"
+    s.judge = lambda n, q, texts: -1 if "octopus in aquarium" in texts else None
+    assert s.pick(scene(1, q="octopus den"), 5).uid == "live"
