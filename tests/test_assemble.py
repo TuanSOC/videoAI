@@ -50,13 +50,16 @@ def test_chunk_breaks_on_max_punct_and_pause():
     assert [[x.word for x in c] for c in chunks] == [["a", "b."], ["c", "d", "e"], ["f"], ["g"]]
 
 
-def test_short_ass_highlights_each_word_once():
+def test_short_ass_karaoke_one_event_per_chunk_with_pop():
     script, tl = make("short")
     ass = subs.build_ass(script, tl, get_settings().preset("short"))
     dialogues = [l for l in ass.splitlines() if l.startswith("Dialogue")]
-    assert len(dialogues) == 8  # one event per spoken word
-    assert all(l.count(subs.HIGHLIGHT) == 1 for l in dialogues)
-    assert "PlayResY: 1920" in ass
+    # "Bí ẩn tam giác." stays whole (no lone "giác." before the full stop)
+    assert len(dialogues) == 3 and "giác." in dialogues[0] and "Bí" in dialogues[0]
+    assert all(subs.POP in d for d in dialogues)
+    assert dialogues[0].count(r"\kf") == 4                  # every word fills over its own duration
+    assert r"{\kf20}Bí" in dialogues[0]                     # 0.1 → 0.3 s = 20 cs
+    assert "PlayResY: 1920" in ass and ",110,210,620," in ass  # safe-zone margins
 
 
 def test_long_ass_one_event_per_chunk():
@@ -131,7 +134,43 @@ def test_long_chunk_avoids_one_word_orphan():
 
 
 def test_two_lines_balances_by_characters():
-    assert subs.two_lines(["a", "b", "c", "extraordinarily"]) == r"a b c\Nextraordinarily"
+    assert subs.two_lines(["a", "b", "c", "extraordinarily"]) == "a b c extraordinarily"  # fits one line
+    words = ["The", "octopus", "has", "three", "hearts", "that", "pump", "blue", "blood", "everywhere"]
+    assert subs.two_lines(words) == r"The octopus has three hearts\Nthat pump blue blood everywhere"
+
+
+# --- smart phrasing & emphasis -----------------------------------------------------------------------
+def ws(*tokens):
+    return [w(tok, i * 0.3, i * 0.3 + 0.25) for i, tok in enumerate(tokens)]
+
+
+def test_chunk_never_ends_on_function_word_or_splits_number_and_unit():
+    texts = [[x.word for x in c] for c in subs.chunk_words(ws("Bạch", "tuộc", "có", "ba", "trái", "tim", "khỏe."), 3)]
+    assert all(c[-1] != "có" for c in texts)
+    texts = [" ".join(x.word for x in c) for c in subs.chunk_words(ws("Mạng", "botnet", "1.5", "triệu", "máy."), 3)]
+    assert any("1.5 triệu" in t for t in texts)
+
+
+def test_emphasis_numbers_names_and_topic_words():
+    script = Script(title="Bạch tuộc thông minh", hook="h", lang="vi", format="short", scenes=[
+        Scene(id=1, narration="Bạch tuộc có 3 trái tim.", visual_query="q"),
+        Scene(id=2, narration="Người ta thấy bạch tuộc ở Nhật Bản.", visual_query="q"),
+        Scene(id=3, narration="Bạch tuộc rất thông minh.", visual_query="q")])
+    em = subs.emphasis_words(script)
+    assert {"3", "bạch", "tuộc", "nhật", "bản"} <= em
+    assert "có" not in em and "người" not in em   # function word / sentence start
+    assert "thông" not in em                      # in the title but said only once
+
+
+def test_short_emphasis_markup_and_long_highlight():
+    script = Script(title="t", hook="h", lang="vi", format="short",
+                    scenes=[Scene(id=1, narration="Có 3 tim.", visual_query="q")])
+    tl = Timeline(scenes=[SceneAudio(scene_id=1, path="a", start=0, duration=1,
+                                     words=[w("Có", 0, .2), w("3", .2, .4), w("tim", .4, .6)])])
+    ass = subs.build_ass(script, tl, get_settings().preset("short"))
+    assert subs.EMPHASIS_ON + "3" + subs.EMPHASIS_OFF in ass
+    long_ass = subs.build_ass(script.model_copy(update={"format": "long"}), tl, get_settings().preset("long"))
+    assert subs.HIGHLIGHT + "3" in long_ass
 
 
 def test_normalize_hashtags():
