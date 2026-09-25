@@ -18,7 +18,7 @@ from slugify import slugify
 
 from vidgen.config import Settings
 from vidgen.fsutil import write_atomic
-from vidgen.models import Asset, Script, Timeline
+from vidgen.models import Asset, Brief, Script, Timeline
 
 log = logging.getLogger(__name__)
 ASSETS = TypeAdapter(list[Asset])
@@ -56,11 +56,18 @@ def _script(job: Job, fmt: str = "short", lang: str = "vi") -> None:
 
     s = job.settings
     llm = default_chain(s)
-    sources = research(job.topic, lang, llm) if s.pipeline.research else []
+    brief = load_brief(job.out_dir)
+    angle = brief.chosen_angle() if brief else None
+    if angle is not None:
+        sources = brief.chosen_sources()
+    else:  # no brief (CLI legacy / older videos): research straight from the topic
+        sources = research(job.topic, lang, llm) if s.pipeline.research else []
     if sources:  # kept for the reviewer: what the script's facts are supposed to come from
         write_atomic(job.out_dir / "sources.md", "\n\n---\n\n".join(
             f"# {src.title}\n{src.url}\n\n{src.text}" for src in sources))
-    script = generate(job.topic, fmt, lang, s.preset(fmt), llm, sources)
+    else:
+        (job.out_dir / "sources.md").unlink(missing_ok=True)
+    script = generate(job.topic, fmt, lang, s.preset(fmt), llm, sources, angle)
     write_atomic(job.out_dir / "script.json", script.model_dump_json(indent=2))
 
 
@@ -167,8 +174,65 @@ def write_script(out_dir: Path, s: Settings) -> None:
     _save_state(out_dir, state)
 
 
-def create_script(topic: str, fmt: str, lang: str, s: Settings) -> Path:
+BRIEF_FILE = "brief.json"
+
+
+def load_brief(out_dir: Path) -> Brief | None:
+    p = out_dir / BRIEF_FILE
+    return Brief.model_validate_json(p.read_text(encoding="utf-8")) if p.exists() else None
+
+
+def split_topics(text: str, lang: str, s: Settings) -> list[str]:
+    """Rough pasted notes → clean topics (one video each)."""
+    from vidgen.script.brief import split_ideas
+    from vidgen.script.llm import default_chain
+
+    return split_ideas(text, lang, default_chain(s))
+
+
+def write_brief(out_dir: Path, s: Settings) -> None:
+    """3 angles with sources for the topic recorded by init_video → brief.json."""
+    from vidgen.script.brief import make_brief
+    from vidgen.script.llm import default_chain
+
+    state = _load_state(out_dir)
+    t = time.time()
+    brief = make_brief(state["topic"], state["lang"], state["format"], default_chain(s),
+                       research=s.pipeline.research)
+    write_atomic(out_dir / BRIEF_FILE, brief.model_dump_json(indent=2))
+    state.setdefault("timings", {})["brief"] = round(time.time() - t, 1)
+    _save_state(out_dir, state)
+
+
+def choose_angle(out_dir: Path, index: int, title: str | None = None, hook: str | None = None,
+                 key_points: list[str] | None = None, excluded_urls: list[str] | None = None) -> Brief:
+    """Record the user's pick (and edits) in brief.json; the next script generation follows it."""
+    brief = load_brief(out_dir)
+    if brief is None:
+        raise ValueError("no brief for this video")
+    if not 0 <= index < len(brief.angles):
+        raise IndexError(f"angle {index} out of range (0-{len(brief.angles) - 1})")
+    angle = brief.angles[index]
+    if title and title.strip():
+        angle.title = title.strip()
+    if hook and hook.strip():
+        angle.hook = hook.strip()
+    if key_points is not None:
+        points = [p.strip() for p in key_points if p.strip()]
+        if points:
+            angle.key_points = points
+    if excluded_urls is not None:
+        brief.excluded_urls = excluded_urls
+    brief.chosen = index
+    write_atomic(out_dir / BRIEF_FILE, brief.model_dump_json(indent=2))
+    return brief
+
+
+def create_script(topic: str, fmt: str, lang: str, s: Settings, angle: int = 0) -> Path:
+    """CLI path: brief → auto-pick `angle` → script."""
     out_dir = init_video(topic, fmt, lang, s)
+    write_brief(out_dir, s)
+    choose_angle(out_dir, min(angle, len(load_brief(out_dir).angles) - 1))
     write_script(out_dir, s)
     return out_dir
 

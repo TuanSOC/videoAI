@@ -68,11 +68,19 @@ def make(
     lang: Lang = typer.Option("vi", "--lang", "-l"),
     review: bool = typer.Option(True, "--review/--no-review",
                                 help="Stop after script.json so you can edit it, then `resume`."),
+    angle: int = typer.Option(1, "--angle", "-a", min=1, max=3,
+                              help="Which brief angle to write: 1 explain, 2 myth-busting, 3 story."),
 ) -> None:
-    """Topic → script.json (review) → voice → visuals → final.mp4 + metadata.json."""
-    from vidgen.pipeline import create_script
+    """Topic → brief (3 angles) → script.json (review) → voice → visuals → final.mp4 + metadata.json."""
+    from vidgen.pipeline import create_script, load_brief
 
-    out_dir = create_script(topic, format, lang, get_settings())
+    out_dir = create_script(topic, format, lang, get_settings(), angle=angle - 1)
+    brief = load_brief(out_dir)
+    table = Table("#", "style", "title", "sources")
+    for i, a in enumerate(brief.angles, 1):
+        mark = "[green]✓[/] " if i - 1 == brief.chosen else ""
+        table.add_row(f"{mark}{i}", a.style, a.title, ", ".join(s.title for s in a.sources) or "—")
+    console.print(table)
     _print_script(out_dir)
     if review:
         console.print(f"\nreview/edit [bold]{out_dir / 'script.json'}[/] (narration, visual_query), then:")

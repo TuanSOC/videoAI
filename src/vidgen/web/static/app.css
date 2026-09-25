@@ -157,6 +157,21 @@ select.input { cursor: pointer; }
 .stats b { color: var(--text); font-weight: 600; }
 .dirty { color: var(--amber); font-size: 12.5px; }
 
+.angles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.angle { padding: 16px; display: grid; gap: 12px; align-content: start; }
+.angle.chosen { border-color: var(--green); }
+.angle-top { display: flex; gap: 6px; }
+.pill.style-explain { color: var(--cyan); background: var(--cyan-soft); }
+.pill.style-myth { color: var(--amber); background: var(--amber-soft); }
+.pill.style-story { color: #c9a7ff; background: rgba(160, 120, 255, .14); }
+.src { display: flex; gap: 9px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--border); cursor: pointer; }
+.src:first-of-type { border-top: 0; }
+.src input { accent-color: var(--accent); margin-top: 3px; flex: none; }
+.src a { color: var(--cyan); font-weight: 500; }
+.src .meta { margin-left: 6px; }
+.src-preview { font-size: 12px; color: var(--muted); margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical; overflow: hidden; }
+.src:has(input:not(:checked)) > div { opacity: .45; text-decoration: line-through; }
 .sources { font-size: 12.5px; color: var(--text-2); margin: -4px 0 12px; }
 .sources a { color: var(--cyan); }
 .sources.warn { color: var(--amber); }

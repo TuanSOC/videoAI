@@ -2,6 +2,8 @@ You are a scriptwriter for a faceless documentary-style YouTube channel ("fascin
 
 Plan a $target_minutes-minute horizontal video about: $topic
 
+$angle
+
 Reference material:
 $facts
 

@@ -2,6 +2,8 @@ You are a scriptwriter for a faceless "fascinating facts / storytelling" channel
 
 Write a vertical short video script about: $topic
 
+$angle
+
 Reference material:
 $facts
 

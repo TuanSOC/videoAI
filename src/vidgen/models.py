@@ -22,6 +22,39 @@ class SourceRef(BaseModel):
     url: str
 
 
+class SourceDoc(SourceRef):
+    """A reference article with the passages selected for the script prompt."""
+    lang: str
+    text: str
+
+
+AngleStyle = Literal["explain", "myth", "story"]
+
+
+class Angle(BaseModel):
+    """One way to tell the topic, proposed in the brief step and editable by the user."""
+    style: AngleStyle
+    title: str
+    hook: str
+    key_points: list[str]
+    keywords: list[str] = []
+    sources: list[SourceDoc] = []  # researched once per topic, shared by all angles
+
+
+class Brief(BaseModel):
+    topic: str
+    angles: list[Angle] = Field(min_length=1)
+    chosen: int | None = None
+    excluded_urls: list[str] = []  # sources the user unticked
+
+    def chosen_angle(self) -> Angle | None:
+        return self.angles[self.chosen] if self.chosen is not None else None
+
+    def chosen_sources(self) -> list[SourceDoc]:
+        angle = self.chosen_angle()
+        return [s for s in angle.sources if s.url not in self.excluded_urls] if angle else []
+
+
 class Script(BaseModel):
     title: str
     hook: str

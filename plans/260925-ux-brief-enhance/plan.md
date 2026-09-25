@@ -4,7 +4,7 @@ description: >-
   AI brief step (3 angles + sources, multi-topic split), correct Wikipedia
   article selection, job persistence across restarts, length indicator,
   per-scene clip swap
-status: pending
+status: in-progress
 priority: P2
 branch: main
 tags:
@@ -45,7 +45,7 @@ Key decisions:
 |-------|------|--------|
 | 1 | [Job Persistence](./phase-01-job-persistence.md) | Completed |
 | 2 | [Research Article Selection](./phase-02-research-article-selection.md) | Completed |
-| 3 | [Brief Step and Multi-Topic](./phase-03-brief-step-and-multi-topic.md) | Pending |
+| 3 | [Brief Step and Multi-Topic](./phase-03-brief-step-and-multi-topic.md) | In Progress |
 | 4 | [Length Indicator](./phase-04-length-indicator.md) | Pending |
 | 5 | [Per-Scene Clip Swap](./phase-05-per-scene-clip-swap.md) | Pending |
 

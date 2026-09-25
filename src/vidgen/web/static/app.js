@@ -2,13 +2,14 @@
 const view = document.getElementById("view");
 const WPS = { vi: 3.3, en: 2.5 }; // spoken words/second, mirrors script/writer.py
 const STATUS = {
-  review: "Chờ duyệt", queued: "Đang chờ", running: "Đang xử lý", rendered: "Thiếu metadata",
-  done: "Hoàn tất", error: "Lỗi", empty: "Trống", interrupted: "Bị gián đoạn",
+  brief: "Chọn góc", review: "Chờ duyệt", queued: "Đang chờ", running: "Đang xử lý",
+  rendered: "Thiếu metadata", done: "Hoàn tất", error: "Lỗi", empty: "Trống", interrupted: "Bị gián đoạn",
 };
 const STEPS = [
-  ["script", "Kịch bản"], ["voice", "Giọng đọc"], ["visuals", "Hình ảnh"],
+  ["brief", "Góc & nguồn"], ["script", "Kịch bản"], ["voice", "Giọng đọc"], ["visuals", "Hình ảnh"],
   ["render", "Dựng video"], ["metadata", "Metadata"],
 ];
+const STYLES = { explain: "Giải thích", myth: "Lật tẩy lầm tưởng", story: "Kể chuyện" };
 const VTYPES = { stock: "Stock", ai_image: "Ảnh AI", ai_video: "Video AI" };
 let pollTimer = null;
 
@@ -93,12 +94,13 @@ async function renderLibrary() {
   if (!["", "#/", "#"].includes(location.hash)) return;
   view.innerHTML = `
     <div class="page-head">
-      <div><h1>Thư viện video</h1><p>Nhập chủ đề → duyệt kịch bản → render → đăng.</p></div>
+      <div><h1>Thư viện video</h1><p>Nhập ý tưởng → chọn góc khai thác → duyệt kịch bản → render → đăng.</p></div>
     </div>
     <form class="card new-video" id="new-form">
-      <label class="field"><span>Chủ đề video</span>
-        <textarea class="input" name="topic" rows="2" required minlength="3" maxlength="200"
-          placeholder="VD: Bí ẩn tam giác Bermuda, Vì sao bạch tuộc có 3 trái tim…"></textarea></label>
+      <label class="field"><span>Ý tưởng video</span>
+        <textarea class="input" name="text" rows="3" required minlength="3" maxlength="4000"
+          placeholder="Một ý tưởng thô là đủ, VD: bạch tuộc. Dán nhiều ý (mỗi dòng một ý) để tạo nhiều video cùng lúc."></textarea>
+        <div class="hint">AI sẽ tách từng chủ đề, đề xuất 3 góc khai thác và tìm nguồn Wikipedia cho mỗi góc.</div></label>
       <div class="row">
         <div class="field"><span>Định dạng</span>
           <div class="segmented" role="radiogroup">
@@ -110,8 +112,8 @@ async function renderLibrary() {
             <input type="radio" id="l-vi" name="lang" value="vi" checked><label for="l-vi">Tiếng Việt</label>
             <input type="radio" id="l-en" name="lang" value="en"><label for="l-en">English</label>
           </div></div>
-        <label class="check grow"><input type="checkbox" name="auto_render"> Bỏ qua bước duyệt, render luôn</label>
-        <button class="btn primary" type="submit">Tạo kịch bản</button>
+        <label class="check grow"><input type="checkbox" name="auto_render"> Tự động hết (lấy góc 1, bỏ qua duyệt)</label>
+        <button class="btn primary" type="submit">Phân tích ý tưởng</button>
       </div>
     </form>
     <h2 class="section-title">${videos.length} video</h2>
@@ -123,14 +125,17 @@ async function renderLibrary() {
     const f = new FormData(ev.target);
     const btn = ev.target.querySelector("button[type=submit]");
     btn.disabled = true;
+    btn.textContent = "Đang phân tích…";
     try {
-      const v = await api("/api/videos", { method: "POST", body: {
-        topic: f.get("topic"), format: f.get("format"), lang: f.get("lang"), auto_render: f.has("auto_render"),
+      const created = await api("/api/ideas", { method: "POST", body: {
+        text: f.get("text"), format: f.get("format"), lang: f.get("lang"), auto_render: f.has("auto_render"),
       } });
-      location.hash = `#/v/${v.slug}`;
+      if (created.length === 1) location.hash = `#/v/${created[0].slug}`;
+      else { toast(`Đã tách thành ${created.length} video — mỗi video đang tìm góc & nguồn`); renderLibrary(); }
     } catch (e) {
       toast(`Không tạo được: ${e.message}`, "error");
       btn.disabled = false;
+      btn.textContent = "Phân tích ý tưởng";
     }
   });
 
@@ -157,6 +162,7 @@ function videoCard(v) {
 // ---------- detail ----------
 let draft = null;   // working copy of script being edited
 let dirty = false;
+let briefMode = null; // slug whose angle cards are open again via "Chọn góc khác"
 
 async function renderDetail(slug, { keepDraft = false } = {}) {
   const v = await api(`/api/videos/${slug}`);
@@ -168,6 +174,8 @@ async function renderDetail(slug, { keepDraft = false } = {}) {
   }
   const lang = v.script?.lang || v.lang;
   const job = v.job;
+  const showBrief = !!v.brief && !active && (!v.script || briefMode === slug);
+  const jobLabel = { brief: "Không tạo được góc khai thác", script: "Không viết được kịch bản" }[job?.kind] || "Render thất bại";
 
   view.innerHTML = `
     <a class="crumb" href="#/">← Thư viện</a>
@@ -179,21 +187,24 @@ async function renderDetail(slug, { keepDraft = false } = {}) {
           <span class="pill">${lang === "vi" ? "Tiếng Việt" : "English"}</span></div>
       </div>
       <div class="actions">
-        <button class="btn ghost sm" id="regen" ${active ? "disabled" : ""}>Viết lại kịch bản</button>
+        ${v.brief && v.script && !showBrief ? `<button class="btn ghost sm" id="other-angle" ${active ? "disabled" : ""}>Chọn góc khác</button>` : ""}
+        ${showBrief && v.script ? `<button class="btn ghost sm" id="back-script">← Quay lại kịch bản</button>` : ""}
+        ${v.script ? `<button class="btn ghost sm" id="regen" ${active ? "disabled" : ""}>Viết lại kịch bản</button>` : ""}
         <button class="btn danger sm" id="delete" ${active ? "disabled" : ""}>Xóa</button>
-        <button class="btn" id="save" ${active || !draft ? "disabled" : ""}>Lưu kịch bản</button>
+        ${showBrief ? "" : `<button class="btn" id="save" ${active || !draft ? "disabled" : ""}>Lưu kịch bản</button>
         <button class="btn primary" id="render" ${active || !draft ? "disabled" : ""}>
-          ${v.has_video ? "Render lại" : "Render video"}</button>
+          ${v.has_video ? "Render lại" : "Render video"}</button>`}
       </div>
     </div>
     ${job?.status === "interrupted" ? `<div class="banner warn"><div><b>Bị gián đoạn</b> khi đang
         ${esc(STEPS.find((s) => s[0] === job.current)?.[1] || (job.kind === "render" ? "render" : "viết kịch bản"))}
         (server đã tắt hoặc khởi động lại). Các bước đã xong sẽ được giữ nguyên.</div>
         <button class="btn primary sm" id="resume">Tiếp tục</button></div>` : ""}
-    ${job?.status === "error" ? `<div class="banner error"><div><b>${job.kind === "script" ? "Không viết được kịch bản" : "Render thất bại"}.</b>
+    ${job?.status === "error" ? `<div class="banner error"><div><b>${jobLabel}.</b>
         Sửa nguyên nhân (thường là thiếu API key — xem <a href="#/settings"><u>Cài đặt</u></a>) rồi thử lại.
         <pre>${esc(job.error)}</pre></div></div>` : ""}
-    ${v.status === "review" && !active ? `<div class="banner info">Kịch bản sẵn sàng. Sửa lời đọc và từ khóa hình nếu cần, rồi bấm <b>Render video</b>.</div>` : ""}
+    ${showBrief ? `<div class="banner info">Chọn một góc khai thác. Có thể sửa tiêu đề, câu mở đầu, ý chính và bỏ tick nguồn không đúng chủ đề — kịch bản chỉ dùng dữ kiện từ nguồn được tick.</div>` : ""}
+    ${v.status === "review" && !active && !showBrief ? `<div class="banner info">Kịch bản sẵn sàng. Sửa lời đọc và từ khóa hình nếu cần, rồi bấm <b>Render video</b>.</div>` : ""}
     <div class="layout">
       <section id="scenes"></section>
       <aside class="side">
@@ -203,7 +214,8 @@ async function renderDetail(slug, { keepDraft = false } = {}) {
       </aside>
     </div>`;
 
-  renderScenes(lang, active, job);
+  if (showBrief) { renderBrief(v); wireBrief(slug, v); }
+  else renderScenes(lang, active, job);
   wireDetail(slug, v);
   if (active) poll(() => renderDetail(slug, { keepDraft: true }).catch(() => {}), 1500);
   else if (job?.status === "done" && job.finished_at > Date.now() / 1000 - 3) refreshHealth();
@@ -211,10 +223,10 @@ async function renderDetail(slug, { keepDraft = false } = {}) {
 
 function stepsHtml(v) {
   const job = v.job;
-  const failedAt = job?.status === "error" ? (job.current || (job.kind === "script" ? "script" : "")) : "";
+  const failedAt = job?.status === "error" ? (job.current || (job.kind === "render" ? "" : job.kind)) : "";
   return `<div class="steps">${STEPS.map(([key, label]) => {
     const js = job?.stages?.[key] || "";
-    const has = key === "script" ? !!v.script : v.artifacts?.[key];
+    const has = key === "brief" ? !!v.brief : key === "script" ? !!v.script : v.artifacts?.[key];
     let cls = "", ic = "";
     if (job && (job.status === "running" || job.status === "queued") && job.current === key) cls = "run";
     else if (failedAt === key) { cls = "fail"; ic = "!"; }
@@ -242,13 +254,80 @@ function metadataHtml(m) {
     + (m.ai_visuals_used ? `<div class="ai-flag">Video có hình AI → khi đăng, bật nhãn “Nội dung đã chỉnh sửa/tổng hợp” (YouTube) / “AI-generated” (TikTok).</div>` : "");
 }
 
+// ---------- brief: 3 angle cards ----------
+function renderBrief(v) {
+  const b = v.brief;
+  const excluded = new Set(b.excluded_urls);
+  const sourceRow = (s) => `
+    <label class="src">
+      <input type="checkbox" data-url="${esc(s.url)}" ${excluded.has(s.url) ? "" : "checked"}>
+      <div><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>
+        <span class="meta">${s.lang}.wikipedia · ${s.chars} ký tự</span>
+        <div class="src-preview">${esc(s.text)}${s.chars > s.text.length ? "…" : ""}</div></div>
+    </label>`;
+  document.getElementById("scenes").innerHTML = `
+    <div class="scenes-head"><h2 class="section-title">Chủ đề: ${esc(b.topic)}</h2></div>
+    <div class="angles">${b.angles.map((a, i) => `
+      <div class="card angle ${b.chosen === i ? "chosen" : ""}" data-i="${i}">
+        <div class="angle-top"><span class="pill style-${a.style}">${STYLES[a.style] || a.style}</span>
+          ${b.chosen === i ? `<span class="pill st-done">Đang dùng</span>` : ""}</div>
+        <label class="field"><span>Tiêu đề</span>
+          <input class="input" data-f="title" value="${esc(a.title)}" maxlength="100"></label>
+        <label class="field"><span>Câu mở đầu (hook)</span>
+          <textarea class="input" data-f="hook" rows="2">${esc(a.hook)}</textarea></label>
+        <label class="field"><span>Ý chính — mỗi dòng một ý</span>
+          <textarea class="input" data-f="key_points" rows="4">${esc(a.key_points.join("\n"))}</textarea></label>
+        <div class="field"><span>Nguồn Wikipedia (bỏ tick nguồn sai chủ đề)</span>
+          ${a.sources.length ? a.sources.map(sourceRow).join("")
+            : `<div class="sources warn">Không tìm được nguồn — kịch bản sẽ nói chung chung, hãy kiểm tra kỹ.</div>`}</div>
+        <button class="btn primary" data-choose="${i}">Chọn góc này & viết kịch bản</button>
+      </div>`).join("")}
+    </div>`;
+}
+
+function wireBrief(slug, v) {
+  const box = document.getElementById("scenes");
+  // the same article can back several angles: keep its checkbox in sync everywhere
+  box.addEventListener("change", (ev) => {
+    const url = ev.target.dataset.url;
+    if (!url) return;
+    box.querySelectorAll(`input[data-url="${CSS.escape(url)}"]`).forEach((c) => (c.checked = ev.target.checked));
+  });
+  box.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest("button[data-choose]");
+    if (!btn) return;
+    if (v.script && !btn.classList.contains("confirm")) {
+      btn.classList.add("confirm", "danger");
+      btn.textContent = "Kịch bản hiện tại sẽ bị viết lại — bấm lần nữa";
+      setTimeout(() => { btn.classList.remove("confirm", "danger"); btn.textContent = "Chọn góc này & viết kịch bản"; }, 4000);
+      return;
+    }
+    const card = btn.closest(".angle");
+    const val = (f) => card.querySelector(`[data-f="${f}"]`).value;
+    const excluded = [...new Set([...box.querySelectorAll("input[data-url]:not(:checked)")].map((c) => c.dataset.url))];
+    btn.disabled = true;
+    try {
+      await api(`/api/videos/${slug}/brief`, { method: "POST", body: {
+        angle: +card.dataset.i, title: val("title"), hook: val("hook"),
+        key_points: val("key_points").split("\n").map((s) => s.trim()).filter(Boolean), excluded_urls: excluded,
+      } });
+      briefMode = null;
+      draft = null;
+      toast("Đang viết kịch bản theo góc đã chọn");
+      renderDetail(slug);
+    } catch (e) { toast(e.message, "error"); btn.disabled = false; }
+  });
+}
+
 function renderScenes(lang, active, job) {
   const box = document.getElementById("scenes");
   if (!draft) {
-    const writing = job && (job.status === "queued" || job.status === "running") && job.kind === "script";
-    box.innerHTML = writing
-      ? `<div class="scenes-head"><h2 class="section-title">Đang viết kịch bản…</h2></div>${'<div class="skeleton"></div>'.repeat(4)}`
-      : `<div class="empty"><strong>Chưa có kịch bản</strong>Bấm “Viết lại kịch bản” để thử lại.</div>`;
+    const running = job && (job.status === "queued" || job.status === "running");
+    const title = !running ? "" : job.current === "brief" || (job.kind === "brief" && !job.current)
+      ? "Đang tìm góc khai thác & nguồn Wikipedia… (~20-40s)" : "Đang viết kịch bản…";
+    box.innerHTML = running
+      ? `<div class="scenes-head"><h2 class="section-title">${title}</h2></div>${'<div class="skeleton"></div>'.repeat(3)}`
+      : `<div class="empty"><strong>Chưa có kịch bản</strong>Thử lại từ nút “Tiếp tục” / tạo video mới.</div>`;
     return;
   }
   const total = draft.scenes.reduce((n, s) => n + words(s.narration), 0);
@@ -346,17 +425,27 @@ function wireDetail(slug, v) {
   });
 
   document.getElementById("resume")?.addEventListener("click", async (ev) => {
-    ev.currentTarget.disabled = true;
+    const b = ev.currentTarget; // currentTarget is null again after the await
+    b.disabled = true;
     try { await api(`/api/videos/${slug}/resume`, { method: "POST" }); toast("Đang chạy tiếp"); renderDetail(slug); }
-    catch (e) { toast(e.message, "error"); ev.currentTarget.disabled = false; }
+    catch (e) { toast(e.message, "error"); b.disabled = false; }
   });
 
-  document.getElementById("save").addEventListener("click", async () => {
+  document.getElementById("other-angle")?.addEventListener("click", () => {
+    briefMode = slug; // the script is only replaced once an angle is confirmed
+    renderDetail(slug, { keepDraft: true });
+  });
+  document.getElementById("back-script")?.addEventListener("click", () => {
+    briefMode = null;
+    renderDetail(slug, { keepDraft: true });
+  });
+
+  document.getElementById("save")?.addEventListener("click", async () => {
     try { await saveDraft(slug); toast("Đã lưu kịch bản"); renderDetail(slug); }
     catch (e) { toast(`Lưu thất bại: ${e.message}`, "error"); }
   });
 
-  document.getElementById("render").addEventListener("click", async (ev) => {
+  document.getElementById("render")?.addEventListener("click", async (ev) => {
     ev.target.disabled = true;
     try {
       if (dirty) await saveDraft(slug);
@@ -366,7 +455,7 @@ function wireDetail(slug, v) {
     } catch (e) { toast(`Không render được: ${e.message}`, "error"); ev.target.disabled = false; }
   });
 
-  document.getElementById("regen").addEventListener("click", async (ev) => {
+  document.getElementById("regen")?.addEventListener("click", async (ev) => {
     const b = ev.currentTarget;
     if (!b.classList.contains("confirm")) {
       b.classList.add("confirm", "danger"); b.textContent = "Ghi đè kịch bản hiện tại?";

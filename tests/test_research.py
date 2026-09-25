@@ -88,7 +88,7 @@ def test_research_degrades_to_no_sources():
 
 
 def test_writer_puts_facts_in_prompt_and_records_sources():
-    src = rs.Source("Octopus", "https://en.wikipedia.org/wiki/Octopus", "en", HEART)
+    src = rs.Source(title="Octopus", url="https://en.wikipedia.org/wiki/Octopus", lang="en", text=HEART)
     long_scene = {"narration": " ".join(["từ"] * 20) + ".", "visual_query": "octopus",
                   "visual_type": "stock", "ai_prompt": ""}
     fake = FakeLLM({"title": "t", "hook": "h", "scenes": [long_scene] * 12})

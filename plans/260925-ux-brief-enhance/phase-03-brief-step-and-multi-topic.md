@@ -1,10 +1,12 @@
 ---
 phase: 3
-title: "Brief Step and Multi-Topic"
-status: pending
+title: Brief Step and Multi-Topic
+status: in-progress
 priority: P1
-effort: "1d"
-dependencies: [1, 2]
+effort: 1d
+dependencies:
+  - 1
+  - 2
 ---
 
 # Phase 3: Brief Step and Multi-Topic

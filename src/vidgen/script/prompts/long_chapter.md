@@ -8,6 +8,8 @@ Write chapter $chapter_index of $chapter_count: "$chapter_title"
 Chapter summary: $chapter_summary
 $position_note
 
+$angle
+
 Reference material:
 $facts
 

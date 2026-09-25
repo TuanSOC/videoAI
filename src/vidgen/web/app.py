@@ -24,14 +24,32 @@ SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,80}$")
 URL_KEYS = ("COMFYUI_URL", "OLLAMA_URL")
 
 ScriptRunner = Callable[[Path, Settings], None]
+BriefRunner = Callable[[Path, Settings], None]
+Splitter = Callable[[str, str, Settings], list[str]]
 StageRunner = Callable[..., dict]
+SOURCE_PREVIEW_CHARS = 280  # the UI shows a preview; full passages stay on disk
 
 
 class NewVideo(BaseModel):
     topic: str = Field(min_length=3, max_length=200)
     format: Literal["short", "long"] = "short"
     lang: Literal["vi", "en"] = "vi"
-    auto_render: bool = False  # skip the review step
+    auto_render: bool = False  # skip the review steps (angle 1, then straight to video)
+
+
+class Ideas(BaseModel):
+    text: str = Field(min_length=3, max_length=4000)
+    format: Literal["short", "long"] = "short"
+    lang: Literal["vi", "en"] = "vi"
+    auto_render: bool = False
+
+
+class ChooseAngle(BaseModel):
+    angle: int
+    title: str | None = None
+    hook: str | None = None
+    key_points: list[str] | None = None
+    excluded_urls: list[str] = []
 
 
 class RenderRequest(BaseModel):
@@ -42,6 +60,8 @@ def video_status(out_dir: Path, job: JobStatus | None) -> str:
     if job and job.status in ("queued", "running", "interrupted", "error"):
         return job.status
     if not (out_dir / "script.json").exists():
+        if (out_dir / pipeline.BRIEF_FILE).exists():
+            return "brief"  # waiting for the user to pick an angle
         return "error" if job else "empty"
     if (out_dir / "metadata.json").exists():
         return "done"
@@ -67,8 +87,13 @@ def last_modified(d: Path) -> float:
 def create_app(settings: Callable[[], Settings] = get_settings,
                script_runner: ScriptRunner = pipeline.write_script,
                stage_runner: StageRunner = pipeline.run_stages,
-               jobs: JobQueue | None = None) -> FastAPI:
+               jobs: JobQueue | None = None,
+               brief_runner: BriefRunner | None = None,
+               splitter: Splitter | None = None) -> FastAPI:
     app = FastAPI(title="vidgen", docs_url="/api/docs", redoc_url=None)
+    # resolved at call time (not as default args) so tests can swap the pipeline functions
+    brief_runner = brief_runner or pipeline.write_brief
+    splitter = splitter or pipeline.split_topics
     jobs = jobs or JobQueue()
     app.state.jobs = jobs
 
@@ -100,11 +125,13 @@ def create_app(settings: Callable[[], Settings] = get_settings,
     def summary(d: Path) -> dict:
         state = pipeline.load_state(d)
         script = read_json_model(d / "script.json", Script)
+        brief = pipeline.load_brief(d)
+        angle = brief.chosen_angle() if brief else None
         job = job_of(d)
         return {
             "slug": d.name,
             "topic": state.get("topic", ""),
-            "title": script.title if script else state.get("topic", d.name),
+            "title": script.title if script else (angle.title if angle else state.get("topic", d.name)),
             "format": script.format if script else state.get("format", "short"),
             "lang": script.lang if script else state.get("lang", "vi"),
             "scenes": len(script.scenes) if script else 0,
@@ -113,6 +140,25 @@ def create_app(settings: Callable[[], Settings] = get_settings,
             "has_video": (d / "final.mp4").exists(),
             "updated": last_modified(d),
         }
+
+    def enqueue_brief(d: Path, then_render: bool) -> None:
+        """Angles + sources. With then_render (auto mode) it also picks angle 1 and runs everything."""
+        def work(job: JobStatus) -> None:
+            job.current = "brief"
+            job.save()
+            s = settings()
+            brief_runner(d, s)
+            job.stages["brief"] = "done"
+            job.save()
+            if then_render:
+                pipeline.choose_angle(d, 0)
+                job.current = "script"
+                job.save()
+                script_runner(d, s)
+                job.stages["script"] = "done"
+                job.save()
+                run_render(job, d, s, None)
+        jobs.submit(d.name, "brief", work, out_dir=d, options={"then_render": then_render})
 
     def enqueue_script(d: Path, then_render: bool) -> None:
         def work(job: JobStatus) -> None:
@@ -149,22 +195,61 @@ def create_app(settings: Callable[[], Settings] = get_settings,
     @app.post("/api/videos", status_code=201)
     def create_video(req: NewVideo) -> dict:
         d = pipeline.init_video(req.topic.strip(), req.format, req.lang, settings())
-        enqueue_script(d, req.auto_render)
+        enqueue_brief(d, req.auto_render)
         return summary(d)
+
+    @app.post("/api/ideas", status_code=201)
+    def create_from_ideas(req: Ideas) -> list[dict]:
+        """Pasted notes → one video per detected topic, each starting with a brief job.
+        The split is a single quick LLM call (skipped for a one-line idea), so it runs in the request."""
+        s = settings()
+        try:
+            topics = splitter(req.text, req.lang, s)
+        except Exception as e:
+            raise HTTPException(502, f"could not analyse the ideas: {e}") from e
+        created = []
+        for topic in topics:
+            d = pipeline.init_video(topic, req.format, req.lang, s)
+            enqueue_brief(d, req.auto_render)
+            created.append(summary(d))
+        return created
 
     @app.get("/api/videos/{slug}")
     def get_video(slug: str) -> dict:
         d = video_dir(slug)
         job = job_of(d)
         meta_path = d / "metadata.json"
+        brief = pipeline.load_brief(d)
+        if brief is not None:  # passages can be long: send a preview, the UI only needs to judge relevance
+            brief_view = brief.model_dump()
+            for a in brief_view["angles"]:
+                for src in a["sources"]:
+                    src["chars"] = len(src["text"])
+                    src["text"] = src["text"][:SOURCE_PREVIEW_CHARS]
         return {
             **summary(d),
             "script": read_json_model(d / "script.json", Script),
+            "brief": brief_view if brief is not None else None,
             "metadata": json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else None,
             "timings": pipeline.load_state(d).get("timings", {}),
             "job": job.to_dict() if job else None,
             "artifacts": {st.name: (d / st.artifact).exists() for st in pipeline.STAGES},
         }
+
+    @app.post("/api/videos/{slug}/brief")
+    def choose(slug: str, req: ChooseAngle) -> dict:
+        """Pick (and optionally edit) an angle, then write the script from it."""
+        d = video_dir(slug)
+        if jobs.busy(slug):
+            raise HTTPException(409, "a job is running for this video")
+        try:
+            pipeline.choose_angle(d, req.angle, req.title, req.hook, req.key_points, req.excluded_urls)
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+        except IndexError as e:
+            raise HTTPException(422, str(e)) from e
+        enqueue_script(d, then_render=False)
+        return {"ok": True}
 
     @app.put("/api/videos/{slug}/script")
     def save_script(slug: str, body: dict) -> dict:
@@ -201,7 +286,15 @@ def create_app(settings: Callable[[], Settings] = get_settings,
         try:
             if job.kind == "render":
                 submit_render(d, None)  # never re-apply force: that would redo finished stages
-            else:
+            elif job.kind == "brief" and not (d / pipeline.BRIEF_FILE).exists():
+                enqueue_brief(d, then_render=bool(job.options.get("then_render")))
+            elif job.kind == "brief" and not job.options.get("then_render"):
+                job.status = "done"  # brief.json was written before the cut: nothing left to run
+                job.save()
+            else:  # script job, or an auto brief that got past the brief itself
+                brief = pipeline.load_brief(d)
+                if brief is not None and brief.chosen is None:
+                    pipeline.choose_angle(d, 0)  # auto mode always takes angle 1
                 enqueue_script(d, then_render=bool(job.options.get("then_render")))
         except RuntimeError as e:
             raise HTTPException(409, str(e)) from e

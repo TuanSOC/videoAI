@@ -14,6 +14,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from vidgen.fsutil import write_atomic
+from vidgen.models import SourceDoc
 from vidgen.script.llm import LLMChain
 
 log = logging.getLogger(__name__)
@@ -33,12 +34,7 @@ class ResearchPlan(BaseModel):
                                             "naming the specific aspect the video is about")
 
 
-@dataclass
-class Source:
-    title: str
-    url: str
-    lang: str
-    text: str  # selected passages
+Source = SourceDoc  # title, url, lang, text (selected passages)
 
 
 PLAN_PROMPT = """A short video will be made about: {topic}
@@ -102,8 +98,10 @@ Which Wikipedia article is the encyclopedic source about the real-world subject 
 Candidates:
 {candidates}
 
-Rules: pick the article that factually covers the subject itself — prefer the most specific one
-(e.g. "Octopus" over "Cephalopod", "Seawater" over "Ocean"). Reject fairy tales, legends, novels,
+Rules: pick the article whose scope matches the topic. A general topic gets the general article
+("octopuses" → "Octopus", not one species like "Giant Pacific octopus"); a specific question gets the
+article that answers it ("why the sea is salty" → "Seawater" rather than "Ocean"; octopus hearts →
+"Octopus" rather than "Cephalopod"). Reject fairy tales, legends, novels,
 films, songs, albums, people, companies, other species with similar names, and disambiguation pages.
 If none fits, answer index -1."""
 
@@ -164,7 +162,7 @@ class Wikipedia:
                           exsectionformat="plain", redirects=1, titles=title)["query"]["pages"]
         page = next(iter(pages.values()))
         text = select_passages(page.get("extract", ""), keywords)
-        return Source(page["title"], page.get("fullurl", ""), lang, text) if text else None
+        return Source(title=page["title"], url=page.get("fullurl", ""), lang=lang, text=text) if text else None
 
 
 MAX_CANDIDATES = 8
