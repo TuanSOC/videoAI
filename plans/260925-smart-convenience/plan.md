@@ -1,7 +1,7 @@
 ---
 title: 'Smarter & faster: relevant clips, fact-check, speed, convenience'
 description: ''
-status: in-progress
+status: completed
 priority: P2
 branch: main
 tags: []
@@ -36,10 +36,10 @@ Decisions:
 |-------|------|--------|
 | 1 | [Relevant Clip Selection](./phase-01-relevant-clip-selection.md) | Completed |
 | 2 | [Speed (voice single request + parallel downloads)](./phase-02-speed-voice-single-request-parallel-downloads.md) | Completed |
-| 3 | [Length Expansion](./phase-03-length-expansion.md) | In Progress |
-| 4 | [Fact-Check Flags](./phase-04-fact-check-flags.md) | Pending |
-| 5 | [Rewrite One Scene](./phase-05-rewrite-one-scene.md) | Pending |
-| 6 | [One-Click Flow and Notifications](./phase-06-one-click-flow-and-notifications.md) | Pending |
+| 3 | [Length Expansion](./phase-03-length-expansion.md) | Completed |
+| 4 | [Fact-Check Flags](./phase-04-fact-check-flags.md) | Completed |
+| 5 | [Rewrite One Scene](./phase-05-rewrite-one-scene.md) | Completed |
+| 6 | [One-Click Flow and Notifications](./phase-06-one-click-flow-and-notifications.md) | Completed |
 
 ## Dependencies
 

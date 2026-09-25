@@ -54,6 +54,48 @@ const pill = (status) => `<span class="pill st-${esc(status)}"><span class="dot"
 function stopPolling() { clearTimeout(pollTimer); pollTimer = null; }
 function poll(fn, ms) { stopPolling(); pollTimer = setTimeout(fn, ms); }
 
+// ---------- background job watcher: tab title + notification when something finishes ----------
+const JOB_LABEL = {
+  brief: "Tìm góc & nguồn", script: "Viết kịch bản", voice: "Giọng đọc", visuals: "Hình ảnh",
+  render: "Dựng video", metadata: "Metadata", extend: "Kéo dài kịch bản", check: "Kiểm tra dữ kiện",
+};
+const DONE_TEXT = {
+  done: "Video đã xong ✅", rendered: "Video đã dựng xong ✅", review: "Kịch bản sẵn sàng để duyệt",
+  brief: "Đã có 3 góc khai thác — chọn một góc", error: "Gặp lỗi ❌", interrupted: "Bị gián đoạn",
+};
+const watching = new Map(); // slug → title of videos seen running
+
+function askNotify() {
+  if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+}
+
+async function watchJobs() {
+  let next = 15000;
+  try {
+    const videos = await api("/api/videos");
+    const active = videos.filter((v) => v.status === "running" || v.status === "queued");
+    for (const v of active) watching.set(v.slug, v.title);
+    for (const [slug, title] of [...watching]) {
+      if (active.some((v) => v.slug === slug)) continue;
+      watching.delete(slug);
+      const v = videos.find((x) => x.slug === slug);
+      if (!v) continue;
+      const text = `${DONE_TEXT[v.status] || "Đã xong"}: ${title}`;
+      toast(text, v.status === "error" ? "error" : "");
+      if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
+        const n = new Notification("vidgen studio", { body: text, tag: slug });
+        n.onclick = () => { window.focus(); location.hash = `#/v/${slug}`; };
+      }
+    }
+    const first = active[0];
+    document.title = first
+      ? `⏳ ${JOB_LABEL[first.stage] || "Đang xử lý"}${active.length > 1 ? ` (+${active.length - 1})` : ""} · vidgen`
+      : "vidgen studio";
+    if (active.length) next = 3000;
+  } catch { /* server restarting: try again later */ }
+  setTimeout(watchJobs, next);
+}
+
 // ---------- router ----------
 async function route() {
   stopPolling();
@@ -66,6 +108,11 @@ async function route() {
     else if (hash.startsWith("#/settings")) await renderSettings();
     else await renderLibrary();
   } catch (e) {
+    if (e instanceof TypeError) { // network error: server restarting — reconnect instead of a dead page
+      view.innerHTML = `<div class="banner info">Đang kết nối lại với vidgen… (server có thể đang khởi động lại)</div>`;
+      poll(route, 2000);
+      return;
+    }
     view.innerHTML = `<div class="banner error"><div><b>Không tải được trang.</b><pre>${esc(e.message)}</pre></div></div>`;
   }
   view.focus({ preventScroll: true });
@@ -116,12 +163,28 @@ async function renderLibrary() {
         <button class="btn primary" type="submit">Phân tích ý tưởng</button>
       </div>
     </form>
-    <h2 class="section-title">${videos.length} video</h2>
+    <div class="lib-head">
+      <h2 class="section-title">${videos.length} video</h2>
+      ${videos.filter((v) => v.status === "review").length
+        ? `<button class="btn sm" id="render-all">Render tất cả video chờ duyệt (${videos.filter((v) => v.status === "review").length})</button>` : ""}
+    </div>
     ${videos.length ? `<div class="grid">${videos.map(videoCard).join("")}</div>` : `
       <div class="empty"><strong>Chưa có video nào</strong>Nhập chủ đề ở trên để tạo video đầu tiên.</div>`}`;
 
+  document.getElementById("render-all")?.addEventListener("click", async (ev) => {
+    const b = ev.currentTarget;
+    b.disabled = true;
+    askNotify();
+    try {
+      const { queued } = await api("/api/render-all", { method: "POST" });
+      toast(`Đã xếp hàng render ${queued.length} video — chạy lần lượt, sẽ báo khi xong`);
+      renderLibrary();
+    } catch (e) { toast(e.message, "error"); b.disabled = false; }
+  });
+
   document.getElementById("new-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    askNotify();
     const f = new FormData(ev.target);
     const btn = ev.target.querySelector("button[type=submit]");
     btn.disabled = true;
@@ -203,8 +266,24 @@ function lengthBar(totalWords) {
         <div class="lenbar-range" style="left:${pct(lo)}%;width:${pct(hi) - pct(lo)}%"></div>
         <div class="lenbar-fill" style="width:${pct(shown)}%"></div>
       </div>
-      <div class="lenbar-label">${label} · mục tiêu ${fmtSec(lo)}–${fmtSec(hi)}${hint}</div>
+      <div class="lenbar-label">${label} · mục tiêu ${fmtSec(lo)}–${fmtSec(hi)}${hint}
+        ${shown < lo && !lengthCtx.active
+          ? `<button class="btn sm" id="extend" title="AI chèn thêm cảnh từ dữ kiện chưa dùng trong nguồn">✨ Kéo dài bằng AI</button>` : ""}</div>
     </div>`;
+}
+
+let factCtx = { checked: false, issues: new Map() }; // narration text → note (from factcheck.json)
+const aiOpen = new Set();  // scene indices with the "✨ rewrite" row open
+const aiUndo = new Map();  // scene index → {narration, visual_query} before the AI rewrite
+
+function factLine(active, job) {
+  if (active && job?.current === "check") return `<div class="factline">Đang đối chiếu từng câu với nguồn…</div>`;
+  const n = draft.scenes.filter((s) => factCtx.issues.has(s.narration)).length;
+  const btn = active ? "" : `<button class="btn ghost sm" id="recheck-facts">Kiểm tra lại</button>`;
+  if (!factCtx.checked) return `<div class="factline muted">Chưa đối chiếu dữ kiện với nguồn. ${btn}</div>`;
+  return n
+    ? `<div class="factline warn">⚠ ${n} câu có thể không khớp nguồn — xem ghi chú dưới từng cảnh. ${btn}</div>`
+    : `<div class="factline ok">✓ Đã đối chiếu với nguồn: không thấy câu nào sai. ${btn}</div>`;
 }
 
 async function renderDetail(slug, { keepDraft = false } = {}) {
@@ -213,15 +292,24 @@ async function renderDetail(slug, { keepDraft = false } = {}) {
   const active = v.status === "running" || v.status === "queued";
   if (!keepDraft || !draft || draft._slug !== slug) {
     draft = v.script ? { ...structuredClone(v.script), _slug: slug } : null;
+    savedSnapshot = draft ? snapshot() : "";
     dirty = false;
+    aiOpen.clear();
+    aiUndo.clear();
   }
   const lang = v.script?.lang || v.lang;
   const job = v.job;
-  lengthCtx = { target: v.target_seconds, wps: v.wps, actual: v.actual_seconds };
+  lengthCtx = { target: v.target_seconds, wps: v.wps, actual: v.actual_seconds, active };
+  factCtx = { checked: !!v.factcheck?.checked,
+              issues: new Map((v.factcheck?.issues || []).map((x) => [x.narration, x.note])) };
   clipCtx = { slug, bySceneId: new Map((v.assets || []).map((a) => [a.scene_id, a])) };
   const needsRerender = v.status === "review" && v.assets && v.metadata && !v.has_video;
   const showBrief = !!v.brief && !active && (!v.script || briefMode === slug);
-  const jobLabel = { brief: "Không tạo được góc khai thác", script: "Không viết được kịch bản" }[job?.kind] || "Render thất bại";
+  const jobLabel = { brief: "Không tạo được góc khai thác", script: "Không viết được kịch bản",
+                     extend: "Không kéo dài được kịch bản", check: "Không kiểm tra được dữ kiện" }[job?.kind]
+                   || "Render thất bại";
+  const taskBanner = active && (job?.kind === "extend" || job?.kind === "check")
+    ? `<div class="banner info">${JOB_LABEL[job.kind]} bằng AI… (~10-30s)</div>` : "";
 
   view.innerHTML = `
     <a class="crumb" href="#/">← Thư viện</a>
@@ -249,6 +337,7 @@ async function renderDetail(slug, { keepDraft = false } = {}) {
     ${job?.status === "error" ? `<div class="banner error"><div><b>${jobLabel}.</b>
         Sửa nguyên nhân (thường là thiếu API key — xem <a href="#/settings"><u>Cài đặt</u></a>) rồi thử lại.
         <pre>${esc(job.error)}</pre></div></div>` : ""}
+    ${taskBanner}
     ${showBrief ? `<div class="banner info">Chọn một góc khai thác. Có thể sửa tiêu đề, câu mở đầu, ý chính và bỏ tick nguồn không đúng chủ đề — kịch bản chỉ dùng dữ kiện từ nguồn được tick.</div>` : ""}
     ${needsRerender && !active ? `<div class="banner info">Đã đổi clip. Bấm <b>Render video</b> để dựng lại — chỉ ghép lại video (~20-40s), giọng đọc và các clip khác giữ nguyên.</div>`
       : v.status === "review" && !active && !showBrief ? `<div class="banner info">Kịch bản sẵn sàng. Sửa lời đọc và từ khóa hình nếu cần, rồi bấm <b>Render video</b>.</div>` : ""}
@@ -315,7 +404,8 @@ function renderBrief(v) {
   // sources are researched once per topic and shared by the angles; union keeps older per-angle briefs working
   const sources = [...new Map(b.angles.flatMap((a) => a.sources).map((s) => [s.url, s])).values()];
   document.getElementById("scenes").innerHTML = `
-    <div class="scenes-head"><h2 class="section-title">Chủ đề: ${esc(b.topic)}</h2></div>
+    <div class="scenes-head"><h2 class="section-title">Chủ đề: ${esc(b.topic)}</h2>
+      <button class="btn ghost sm" id="regen-brief" title="Tra nguồn lại và đề xuất 3 góc mới">↻ Tạo lại 3 góc</button></div>
     <div class="card panel brief-sources"><h2 class="section-title">Nguồn Wikipedia — bỏ tick nguồn sai chủ đề</h2>
       ${sources.length ? sources.map(sourceRow).join("")
         : `<div class="sources warn">Không tìm được nguồn — kịch bản sẽ nói chung chung, hãy kiểm tra kỹ dữ kiện.</div>`}
@@ -330,7 +420,11 @@ function renderBrief(v) {
           <textarea class="input" data-f="hook" rows="3">${esc(a.hook)}</textarea></label>
         <label class="field"><span>Ý chính — mỗi dòng một ý</span>
           <textarea class="input" data-f="key_points" rows="7">${esc(a.key_points.join("\n"))}</textarea></label>
-        <button class="btn primary" data-choose="${i}">Chọn góc này & viết kịch bản</button>
+        <div class="angle-actions">
+          <button class="btn primary" data-choose="${i}">Chọn góc này & viết kịch bản</button>
+          <button class="btn sm" data-choose="${i}" data-render="1" title="Viết kịch bản rồi dựng video luôn, không dừng để duyệt">
+            Chọn & tạo video luôn</button>
+        </div>
       </div>`).join("")}
     </div>`;
 }
@@ -338,14 +432,28 @@ function renderBrief(v) {
 function wireBrief(slug, v) {
   const box = document.getElementById("scenes");
   box.addEventListener("click", async (ev) => {
+    if (ev.target.closest("#regen-brief")) {
+      const b = ev.target.closest("#regen-brief");
+      b.disabled = true;
+      try {
+        await api(`/api/videos/${slug}/brief/regenerate`, { method: "POST" });
+        briefMode = null;
+        toast("Đang tra nguồn lại và đề xuất 3 góc mới…");
+        renderDetail(slug);
+      } catch (e) { toast(e.message, "error"); b.disabled = false; }
+      return;
+    }
     const btn = ev.target.closest("button[data-choose]");
     if (!btn) return;
+    const label = btn.textContent;
     if (v.script && !btn.classList.contains("confirm")) {
       btn.classList.add("confirm", "danger");
       btn.textContent = "Kịch bản hiện tại sẽ bị viết lại — bấm lần nữa";
-      setTimeout(() => { btn.classList.remove("confirm", "danger"); btn.textContent = "Chọn góc này & viết kịch bản"; }, 4000);
+      setTimeout(() => { btn.classList.remove("confirm", "danger"); btn.textContent = label; }, 4000);
       return;
     }
+    const thenRender = !!btn.dataset.render;
+    askNotify();
     const card = btn.closest(".angle");
     const val = (f) => card.querySelector(`[data-f="${f}"]`).value;
     const excluded = [...new Set([...box.querySelectorAll("input[data-url]:not(:checked)")].map((c) => c.dataset.url))];
@@ -354,10 +462,11 @@ function wireBrief(slug, v) {
       await api(`/api/videos/${slug}/brief`, { method: "POST", body: {
         angle: +card.dataset.i, title: val("title"), hook: val("hook"),
         key_points: val("key_points").split("\n").map((s) => s.trim()).filter(Boolean), excluded_urls: excluded,
+        then_render: thenRender,
       } });
       briefMode = null;
       draft = null;
-      toast("Đang viết kịch bản theo góc đã chọn");
+      toast(thenRender ? "Đang viết kịch bản và dựng video — sẽ báo khi xong" : "Đang viết kịch bản theo góc đã chọn");
       renderDetail(slug);
     } catch (e) { toast(e.message, "error"); btn.disabled = false; }
   });
@@ -387,6 +496,7 @@ function renderScenes(lang, active, job) {
           `<a href="${safeUrl(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>`).join(" · ")}
           — vẫn nên đối chiếu trước khi render.</div>`
       : `<div class="sources warn">Không tìm được nguồn tham khảo — hãy kiểm tra kỹ các dữ kiện trong kịch bản.</div>`}
+    ${draft.sources?.length ? factLine(active, job) : ""}
     ${draft.scenes.map((s, i) => {
       const chapter = s.chapter && s.chapter !== lastChapter ? `<div class="chapter">${esc(s.chapter)}</div>` : "";
       lastChapter = s.chapter;
@@ -406,11 +516,21 @@ function sceneHtml(s, i, lang, active) {
         <div class="scene-tools">
           <button class="btn ghost icon sm" data-act="up" title="Lên" ${dis || (i === 0 ? "disabled" : "")}>↑</button>
           <button class="btn ghost icon sm" data-act="down" title="Xuống" ${dis || (i === draft.scenes.length - 1 ? "disabled" : "")}>↓</button>
+          <button class="btn ghost icon sm" data-act="ai" title="Viết lại cảnh này bằng AI" ${dis || (s.id ? "" : "disabled")}>✨</button>
           <button class="btn ghost icon sm" data-act="insert" title="Chèn cảnh bên dưới" ${dis}>+</button>
           <button class="btn ghost icon sm danger" data-act="remove" title="Xóa cảnh" ${dis || (draft.scenes.length === 1 ? "disabled" : "")}>✕</button>
         </div>
       </div>
       <textarea class="input narration" data-f="narration" rows="2" aria-label="Lời đọc cảnh ${i + 1}" ${dis}>${esc(s.narration)}</textarea>
+      ${factCtx.issues.has(s.narration) ? `<div class="flag">⚠ ${esc(factCtx.issues.get(s.narration))}</div>` : ""}
+      ${aiOpen.has(i) && !active ? `
+        <div class="ai-row">
+          <input class="input sm" data-ai-instr="${i}" maxlength="300"
+            placeholder="Yêu cầu (tùy chọn): ngắn hơn, hấp dẫn hơn, sửa theo nguồn…">
+          <button class="btn sm primary" data-act="ai-go">Viết lại</button>
+        </div>` : ""}
+      ${aiUndo.has(i) && !active ? `<div class="ai-undo">Đã viết lại bằng AI (chưa lưu) ·
+        <button class="btn ghost sm" data-act="ai-undo">↶ Hoàn tác</button></div>` : ""}
       <div class="scene-row">
         <input class="input" data-f="visual_query" value="${esc(s.visual_query)}" placeholder="Từ khóa hình (tiếng Anh)" aria-label="Từ khóa hình" ${dis}>
         <select class="input" data-f="visual_type" aria-label="Loại hình" ${dis}>
@@ -420,6 +540,37 @@ function sceneHtml(s, i, lang, active) {
       ${s.visual_type !== "stock" ? `<textarea class="input ai-prompt" data-f="ai_prompt" rows="2" placeholder="Prompt AI (tiếng Anh, mô tả chân thực)" aria-label="Prompt AI" ${dis}>${esc(s.ai_prompt)}</textarea>` : ""}
       ${active ? "" : clipHtml(s)}
     </div>`;
+}
+
+async function aiRewrite(slug, i, btn, lang, job) {
+  const scene = draft.scenes[i];
+  const instruction = document.querySelector(`input[data-ai-instr="${i}"]`)?.value.trim();
+  btn.disabled = true;
+  btn.textContent = "Đang viết…";
+  try {
+    const out = await api(`/api/videos/${slug}/scenes/${scene.id}/rewrite`, { method: "POST",
+      body: { narration: scene.narration, instruction: instruction || null } });
+    aiUndo.set(i, { narration: scene.narration, visual_query: scene.visual_query });
+    scene.narration = out.narration;
+    scene.visual_query = out.visual_query;
+    aiOpen.delete(i);
+    markDirty();
+    renderScenes(lang, false, job);
+  } catch (e) {
+    toast(e.message, "error");
+    btn.disabled = false;
+    btn.textContent = "Viết lại";
+  }
+}
+
+async function runTask(slug, kind, btn, message) {
+  btn.disabled = true;
+  try {
+    if (dirty) await saveDraft(slug); // the task works on the saved script
+    await api(`/api/videos/${slug}/${kind}`, { method: "POST" });
+    toast(message);
+    renderDetail(slug);
+  } catch (e) { toast(e.message, "error"); btn.disabled = false; }
 }
 
 async function swapClip(slug, sceneId, btn) {
@@ -437,9 +588,14 @@ async function swapClip(slug, sceneId, btn) {
   }
 }
 
+let savedSnapshot = ""; // the script as last loaded/saved: "unsaved" means different from this
+
+const snapshot = () => { const { _slug, ...script } = draft; return JSON.stringify(script); };
+
 function markDirty() {
-  dirty = true;
-  document.getElementById("dirty")?.removeAttribute("hidden");
+  // compare, don't just flag: undoing an edit (or an AI rewrite) back to the saved text is not a change
+  dirty = snapshot() !== savedSnapshot;
+  document.getElementById("dirty")?.toggleAttribute("hidden", !dirty);
   refreshLength();
 }
 
@@ -454,6 +610,7 @@ function refreshLength() {
 async function saveDraft(slug) {
   const { _slug, ...script } = draft;
   await api(`/api/videos/${slug}/script`, { method: "PUT", body: script });
+  savedSnapshot = snapshot();
   dirty = false;
 }
 
@@ -479,6 +636,17 @@ function wireDetail(slug, v) {
     const btn = ev.target.closest("button");
     if (!btn) return;
     if (btn.dataset.swap) return swapClip(slug, +btn.dataset.swap, btn); // not a script edit
+    if (btn.id === "extend") return runTask(slug, "extend", btn, "Đang kéo dài kịch bản bằng AI…");
+    if (btn.id === "recheck-facts") return runTask(slug, "check", btn, "Đang đối chiếu dữ kiện…");
+    const act = btn.dataset.act;
+    if (act === "ai" || act === "ai-go" || act === "ai-undo") {
+      const i = +btn.closest(".scene").dataset.i;
+      if (act === "ai") { aiOpen.has(i) ? aiOpen.delete(i) : aiOpen.add(i); }
+      if (act === "ai-undo") { Object.assign(draft.scenes[i], aiUndo.get(i)); aiUndo.delete(i); markDirty(); }
+      if (act === "ai-go") return aiRewrite(slug, i, btn, lang, v.job);
+      renderScenes(lang, false, v.job);
+      return;
+    }
     if (btn.id === "add-scene") {
       draft.scenes.push({ id: 0, narration: "", visual_query: "", visual_type: "stock", ai_prompt: "", chapter: draft.scenes.at(-1)?.chapter ?? null });
     } else if (btn.dataset.act) {
@@ -489,9 +657,10 @@ function wireDetail(slug, v) {
       if (btn.dataset.act === "up") [sc[i - 1], sc[i]] = [sc[i], sc[i - 1]];
       if (btn.dataset.act === "down") [sc[i + 1], sc[i]] = [sc[i], sc[i + 1]];
     } else return;
+    aiOpen.clear(); // indices moved: AI rows / undo slots no longer point at the same scene
+    aiUndo.clear();
     markDirty();
     renderScenes(lang, false, v.job);
-    document.getElementById("dirty")?.removeAttribute("hidden");
   });
 
   document.getElementById("resume")?.addEventListener("click", async (ev) => {
@@ -619,3 +788,4 @@ async function renderSettings() {
 
 refreshHealth();
 route();
+watchJobs();

@@ -115,13 +115,21 @@ def test_generate_long_outline_then_chapters():
     assert "in this chapter: 0" in first_tries[2]
 
 
-def test_short_draft_retried_once_when_too_short():
-    long_scene = scene(" ".join(["từ"] * 20) + ".")
-    long_draft = {"title": "t", "hook": "h", "scenes": [long_scene] * 12}  # 240 words
-    fake = FakeProvider("fake", [SHORT, long_draft])
+def test_short_draft_is_expanded_keeping_its_scenes():
+    extra = [scene(" ".join(["mới"] * 20) + ".") for _ in range(8)]
+    expanded = {"scenes": SHORT["scenes"][:2] + extra + SHORT["scenes"][2:]}  # originals kept, in order
+    fake = FakeProvider("fake", [SHORT, expanded])
     script = writer.generate("x", "short", "vi", get_settings().preset("short"), LLMChain([fake]))
-    assert len(fake.prompts) == 2 and "far too short" in fake.prompts[1]
-    assert script.word_count == 240
+    assert len(fake.prompts) == 2 and "You are extending a video script" in fake.prompts[1]
+    assert "Ships vanish here." in fake.prompts[1]          # the draft is shown to the model
+    assert script.word_count > 150 and script.scenes[0].narration == "Ships vanish here."
+
+
+def test_expansion_that_drops_original_scenes_is_rejected():
+    rewritten = {"scenes": [scene(" ".join(["khác"] * 20) + ".") for _ in range(12)]}
+    fake = FakeProvider("fake", [SHORT, rewritten])
+    script = writer.generate("x", "short", "vi", get_settings().preset("short"), LLMChain([fake]))
+    assert script.title == "Bermuda" and script.word_count < 20  # kept the draft
 
 
 def test_short_draft_keeps_first_when_retry_is_not_longer():
@@ -154,3 +162,34 @@ def test_chain_skips_provider_on_error():
 def test_chain_all_fail():
     with pytest.raises(LLMError, match="All LLM providers failed"):
         LLMChain([FakeProvider("x", [RuntimeError("down")])]).generate("p", writer.ShortDraft)
+
+
+def test_extend_script_by_chapter_skips_intro():
+    from vidgen.models import Script
+    s = Script(title="t", hook="h", lang="en", format="long", scenes=[
+        Scene(id=1, narration="Hook sentence here.", visual_query="q", chapter="Intro"),
+        Scene(id=2, narration="Fact one is short.", visual_query="q", chapter="A"),
+        Scene(id=3, narration="Fact two is short.", visual_query="q", chapter="B")])
+
+    class Grow:
+        name = "grow"
+        prompts = []
+
+        def generate_json(self, prompt, schema):
+            self.prompts.append(prompt)
+            data = json.loads(prompt.split("Current scenes (JSON, in order):")[1].split("The script has")[0])
+            return json.dumps({"scenes": data + [scene(" ".join(["more"] * 20) + ".")]})
+
+    preset = get_settings().preset("long")
+    out = writer.extend_script(s, preset, LLMChain([Grow()]))
+    assert out.scenes[0].narration == "Hook sentence here." and out.scenes[0].chapter == "Intro"
+    assert [sc.chapter for sc in out.scenes].count("A") == 2 and len(Grow.prompts) == 2
+    assert [sc.id for sc in out.scenes] == list(range(1, len(out.scenes) + 1))
+
+
+def test_extend_script_noop_when_long_enough():
+    from vidgen.models import Script
+    long_text = " ".join(["từ"] * 250) + "."
+    s = Script(title="t", hook="h", lang="vi", format="short",
+               scenes=[Scene(id=1, narration=long_text, visual_query="q")])
+    assert writer.extend_script(s, get_settings().preset("short"), LLMChain([FakeProvider("x", [SHORT])])) is None

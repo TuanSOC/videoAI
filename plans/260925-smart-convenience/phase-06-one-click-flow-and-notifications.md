@@ -1,8 +1,8 @@
 ---
 phase: 6
-title: "One-Click Flow and Notifications"
-status: pending
-effort: ""
+title: One-Click Flow and Notifications
+status: completed
+effort: ''
 ---
 
 # Phase 6: One-Click Flow and Notifications

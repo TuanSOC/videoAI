@@ -1,7 +1,7 @@
 ---
 phase: 3
 title: Length Expansion
-status: in-progress
+status: completed
 effort: ''
 ---
 

@@ -1,8 +1,8 @@
 ---
 phase: 4
-title: "Fact-Check Flags"
-status: pending
-effort: ""
+title: Fact-Check Flags
+status: completed
+effort: ''
 ---
 
 # Phase 4: Fact-Check Flags

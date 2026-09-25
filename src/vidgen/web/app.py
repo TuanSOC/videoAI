@@ -54,6 +54,12 @@ class ChooseAngle(BaseModel):
     hook: str | None = None
     key_points: list[str] | None = None
     excluded_urls: list[str] = []
+    then_render: bool = False  # "Chọn góc & tạo video luôn": script → voice → visuals → video
+
+
+class RewriteRequest(BaseModel):
+    narration: str | None = Field(default=None, max_length=1000)    # the unsaved text on screen
+    instruction: str | None = Field(default=None, max_length=300)   # e.g. "ngắn hơn", "hài hước hơn"
 
 
 class SwapRequest(BaseModel):
@@ -95,11 +101,17 @@ def create_app(settings: Callable[[], Settings] = get_settings,
                stage_runner: StageRunner = pipeline.run_stages,
                jobs: JobQueue | None = None,
                brief_runner: BriefRunner | None = None,
-               splitter: Splitter | None = None) -> FastAPI:
+               splitter: Splitter | None = None,
+               extend_runner: Callable[[Path, Settings], object] | None = None,
+               check_runner: Callable[[Path, Settings], object] | None = None,
+               rewriter: Callable[..., dict] | None = None) -> FastAPI:
     app = FastAPI(title="vidgen", docs_url="/api/docs", redoc_url=None)
     # resolved at call time (not as default args) so tests can swap the pipeline functions
     brief_runner = brief_runner or pipeline.write_brief
     splitter = splitter or pipeline.split_topics
+    extend_runner = extend_runner or pipeline.extend_script_file
+    check_runner = check_runner or pipeline.check_facts
+    rewriter = rewriter or pipeline.rewrite_scene
     jobs = jobs or JobQueue()
     app.state.jobs = jobs
 
@@ -251,6 +263,8 @@ def create_app(settings: Callable[[], Settings] = get_settings,
             "target_seconds": list(settings().preset(info["format"]).target_seconds),
             "wps": WORDS_PER_SECOND[info["lang"]],
             "actual_seconds": actual,
+            "factcheck": (json.loads((d / "factcheck.json").read_text(encoding="utf-8"))
+                          if (d / "factcheck.json").exists() else None),
             "metadata": json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else None,
             "timings": pipeline.load_state(d).get("timings", {}),
             "job": job.to_dict() if job else None,
@@ -290,8 +304,73 @@ def create_app(settings: Callable[[], Settings] = get_settings,
                 raise HTTPException(409, str(e)) from e
             except IndexError as e:
                 raise HTTPException(422, str(e)) from e
-            enqueue_script(d, then_render=False)
+            enqueue_script(d, then_render=req.then_render)
         return {"ok": True}
+
+    @app.post("/api/videos/{slug}/brief/regenerate")
+    def regenerate_brief(slug: str) -> dict:
+        """New research + 3 new angles for the same topic (the current script, if any, is kept until
+        another angle is chosen)."""
+        d = video_dir(slug)
+        with exclusive(slug):
+            enqueue_brief(d, then_render=False)
+        return {"ok": True}
+
+    def enqueue_task(d: Path, kind: str, fn: Callable[[Path, Settings], object]) -> None:
+        """A short LLM task on the video (extend / check) through the same one-at-a-time queue."""
+        def work(job: JobStatus) -> None:
+            job.current = kind
+            job.save()
+            fn(d, settings())
+        jobs.submit(d.name, kind, work, out_dir=d)
+
+    @app.post("/api/videos/{slug}/extend")
+    def extend(slug: str) -> dict:
+        """"Kéo dài": add scenes from unused facts toward the target length (then re-checks facts)."""
+        d = video_dir(slug)
+        if not (d / "script.json").exists():
+            raise HTTPException(409, "no script yet")
+        with exclusive(slug):
+            enqueue_task(d, "extend", extend_runner)
+        return {"ok": True}
+
+    @app.post("/api/videos/{slug}/check")
+    def check(slug: str) -> dict:
+        """Re-run the fact check on the saved script (e.g. after editing sentences)."""
+        d = video_dir(slug)
+        if not (d / "script.json").exists():
+            raise HTTPException(409, "no script yet")
+        with exclusive(slug):
+            enqueue_task(d, "check", check_runner)
+        return {"ok": True}
+
+    @app.post("/api/videos/{slug}/scenes/{scene_id}/rewrite")
+    def rewrite(slug: str, scene_id: int, req: RewriteRequest) -> dict:
+        """AI rewrite of one scene, returned (not saved): the UI puts it in the draft to accept or undo."""
+        d = video_dir(slug)
+        if not (d / "script.json").exists():
+            raise HTTPException(409, "no script yet")
+        try:
+            return rewriter(d, settings(), scene_id, req.narration, req.instruction)
+        except KeyError as e:
+            raise HTTPException(404, str(e)) from e
+        except Exception as e:  # LLM down / invalid output
+            raise HTTPException(502, f"AI không viết lại được: {e}") from e
+
+    @app.post("/api/render-all")
+    def render_all() -> dict:
+        """Queue a render for every video whose script is ready but not rendered yet."""
+        r = root()
+        queued = []
+        for d in (sorted(r.iterdir()) if r.exists() else []):
+            if d.is_dir() and SLUG_RE.match(d.name) and video_status(d, job_of(d)) == "review":
+                try:
+                    with exclusive(d.name, check_busy=False):
+                        submit_render(d, None)
+                    queued.append(d.name)
+                except HTTPException:
+                    continue  # busy or locked: skip it, the rest still get queued
+        return {"queued": queued}
 
     @app.put("/api/videos/{slug}/script")
     def save_script(slug: str, body: dict) -> dict:
@@ -325,6 +404,12 @@ def create_app(settings: Callable[[], Settings] = get_settings,
         with exclusive(slug, check_busy=False):
             if job.kind == "render":
                 submit_render(d, None)  # never re-apply force: that would redo finished stages
+            elif job.kind == "check":
+                enqueue_task(d, "check", check_runner)
+            elif job.kind == "extend":
+                # re-running could add scenes twice if the first run already saved; let the user decide
+                job.status = "done"
+                job.save()
             elif job.kind == "brief" and not (d / pipeline.BRIEF_FILE).exists():
                 enqueue_brief(d, then_render=bool(job.options.get("then_render")))
             elif job.kind == "brief" and not job.options.get("then_render"):

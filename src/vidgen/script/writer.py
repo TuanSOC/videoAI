@@ -1,5 +1,7 @@
 """Topic → validated Script. Short: one LLM call. Long: outline, then one call per chapter."""
 
+import json
+import logging
 import re
 from pathlib import Path
 from string import Template
@@ -11,6 +13,7 @@ from vidgen.models import Angle, Scene, Script, SourceRef, VisualType
 from vidgen.script.llm import LLMChain
 from vidgen.script.research import Source, facts_block
 
+log = logging.getLogger(__name__)
 PROMPTS = Path(__file__).parent / "prompts"
 LANG_NAMES = {"vi": "Vietnamese", "en": "English"}
 # Spoken rate of edge-tts neural voices; Vietnamese counts space-separated syllables.
@@ -93,18 +96,109 @@ def _draft_words(draft) -> int:
     return sum(len(s.narration.split()) for s in draft.scenes)
 
 
-def _generate_with_length(llm: LLMChain, prompt: str, schema, target_words: int):
-    """Small local models under-write. If a draft is under MIN_LENGTH_RATIO of the target,
-    ask once more with concrete feedback and keep the longer draft."""
+class ExpandedScenes(BaseModel):
+    scenes: list[LLMScene] = Field(min_length=1)
+
+
+WORDS_PER_NEW_SCENE = 15
+
+
+def expand_scenes(scenes: list[LLMScene], target_words: int, ctx: dict, lang: str,
+                  llm: LLMChain) -> list[LLMScene] | None:
+    """Grow a draft toward target_words by INSERTING scenes built from unused facts.
+    Small local models ignore "write longer" when rewriting from scratch (real drafts stayed at
+    117-164 words for a ~200 target); extending a draft they can see works far better.
+    Returns None if the result isn't longer or didn't keep the original scenes."""
+    current = sum(len(s.narration.split()) for s in scenes)
+    if current >= target_words:
+        return None
+    listing = json.dumps([{"narration": s.narration, "visual_query": s.visual_query} for s in scenes],
+                         ensure_ascii=False, indent=1)
+    new_count = max(1, round((target_words - current) / WORDS_PER_NEW_SCENE))
+    try:
+        result = llm.generate(_render("expand.md", scenes=listing, current_words=current,
+                                      target_words=target_words, new_scenes=new_count,
+                                      lang_name=LANG_NAMES[lang], **ctx), ExpandedScenes).scenes
+    except Exception as e:  # LLM trouble just means "keep the draft"
+        log.warning("expanding the script failed: %s", e)
+        return None
+    kept = {s.narration.strip() for s in result}
+    preserved = sum(s.narration.strip() in kept for s in scenes) / len(scenes)
+    grew = sum(len(s.narration.split()) for s in result) > current
+    return result if grew and preserved >= 0.8 else None
+
+
+def _generate_with_length(llm: LLMChain, prompt: str, schema, target_words: int, ctx: dict, lang: str):
+    """Draft, then if it's under MIN_LENGTH_RATIO of the target, expand it (see expand_scenes)."""
     draft = llm.generate(prompt, schema)
-    got = _draft_words(draft)
-    if got >= target_words * MIN_LENGTH_RATIO:
+    if _draft_words(draft) >= target_words * MIN_LENGTH_RATIO:
         return draft
-    feedback = (f"\n\nIMPORTANT: a previous draft had only {got} words, far too short. "
-                f"Write at least {target_words} words: add more scenes with more concrete facts. "
-                "Do not pad with filler or repeat sentences.")
-    retry = llm.generate(prompt + feedback, schema)
-    return retry if _draft_words(retry) > got else draft
+    expanded = expand_scenes(draft.scenes, target_words, ctx, lang, llm)
+    return draft.model_copy(update={"scenes": expanded}) if expanded else draft
+
+
+DEFAULT_REWRITE = "Make it more engaging and clearer, same meaning, stay factual."
+
+
+SHORTER_HINTS = ("ngắn", "gọn", "short", "concise", "brief")
+
+
+def rewrite_one(script: Script, scene: Scene, prev: str, nxt: str, instruction: str | None,
+                sources: list[Source], angle: Angle | None, llm: LLMChain) -> LLMScene:
+    """One scene rewritten. An 8B model tends to merge the neighbouring scene in (seen live: "shorter"
+    returned 32 words vs 18), so a result over the limit — or not shorter when asked — gets one retry."""
+    instr = (instruction or "").strip() or DEFAULT_REWRITE
+    current_words = len(scene.narration.split())
+    wants_shorter = any(h in instr.lower() for h in SHORTER_HINTS)
+    limit = min(MAX_SCENE_WORDS, current_words - 1) if wants_shorter and current_words > 3 else MAX_SCENE_WORDS
+    prompt = _render(
+        "rewrite_scene.md", title=script.title, lang_name=LANG_NAMES[script.lang], angle=angle_block(angle),
+        facts=facts_block(sources), prev=prev or "(none — this is the opening)", current=scene.narration,
+        next=nxt or "(none — this is the ending)", instruction=instr, max_words=limit,
+        current_words=current_words)
+    out = llm.generate(prompt, LLMScene)
+    got = len(out.narration.split())
+    if got > limit:
+        retry = llm.generate(prompt + f"\n\nYour previous answer had {got} words: rewrite it with at most "
+                                      f"{limit} words, this scene's idea only.", LLMScene)
+        if len(retry.narration.split()) < got:
+            out = retry
+    if not out.visual_query.isascii():  # seen live: a Vietnamese query, useless for stock search
+        out = out.model_copy(update={"visual_query": scene.visual_query})
+    return out
+
+
+def extend_script(script: Script, preset: FormatPreset, llm: LLMChain, sources: list[Source] | None = None,
+                  angle: Angle | None = None) -> Script | None:
+    """"Kéo dài" button: bring an existing script toward the middle of the format's target length.
+    Long videos are extended chapter by chapter (a 100-scene prompt would not fit the context);
+    the deficit is shared in proportion to each chapter's length. None if nothing could be added."""
+    ctx = {"facts": facts_block(sources or []), "angle": angle_block(angle)}
+    target = int(target_seconds(preset) * WORDS_PER_SECOND[script.lang])
+    total = script.word_count
+    if total >= target:
+        return None
+    groups: dict[str | None, list[Scene]] = {}
+    for sc in script.scenes:
+        groups.setdefault(sc.chapter, []).append(sc)
+    out: list[Scene] = []
+    changed = False
+    for chapter, scenes in groups.items():
+        words = sum(len(s.narration.split()) for s in scenes)
+        share = (target - total) * words / total
+        grown = None
+        if chapter != "Intro" and share >= WORDS_PER_NEW_SCENE / 2:
+            drafts = [LLMScene(narration=s.narration, visual_query=s.visual_query, visual_type=s.visual_type,
+                               ai_prompt=s.ai_prompt) for s in scenes]
+            grown = expand_scenes(drafts, int(words + share), ctx, script.lang, llm)
+        if grown:
+            changed = True
+            out += [Scene(id=0, chapter=chapter, **s.model_dump()) for s in grown]
+        else:
+            out += scenes
+    if not changed:
+        return None
+    return script.model_copy(update={"scenes": postprocess(out, preset.max_ai_video)})
 
 
 def _generate_short(topic, lang, preset, llm, seconds, words, ctx):
@@ -112,7 +206,7 @@ def _generate_short(topic, lang, preset, llm, seconds, words, ctx):
         "short.md", topic=topic, **ctx, lang_name=LANG_NAMES[lang], target_words=words,
         target_seconds=seconds, scene_range="8-14", max_ai_video=preset.max_ai_video,
     )
-    draft = _generate_with_length(llm, prompt, ShortDraft, words)
+    draft = _generate_with_length(llm, prompt, ShortDraft, words, ctx, lang)
     return draft.title, draft.hook, [Scene(id=0, **s.model_dump()) for s in draft.scenes]
 
 
@@ -141,7 +235,7 @@ def _generate_long(topic, lang, preset, llm, seconds, words, ctx):
                     chapter_summary=ch.summary, position_note=note, lang_name=LANG_NAMES[lang],
                     # spread the AI-video budget: one slot per chapter for the first N chapters
                     target_words=per_chapter, max_ai_video=1 if i <= preset.max_ai_video else 0),
-            ChapterDraft, per_chapter,
+            ChapterDraft, per_chapter, ctx, lang,
         )
         scenes += [Scene(id=0, chapter=ch.title, **s.model_dump()) for s in draft.scenes]
     return outline.title, outline.hook, scenes

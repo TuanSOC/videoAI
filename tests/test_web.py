@@ -434,3 +434,59 @@ def test_render_refused_while_a_swap_is_downloading(env, monkeypatch):
         t.join()
     assert client.post(f"/api/videos/{slug}/render", json={}).status_code == 200
     jobs.wait_idle()
+
+
+# --- smart & convenience ------------------------------------------------------------------------
+def test_choose_with_then_render_goes_straight_to_video(env):
+    client, jobs, calls, s = env
+    r = client.post("/api/videos", json={"topic": "bạch tuộc"})
+    jobs.wait_idle()
+    slug = r.json()["slug"]
+    assert client.post(f"/api/videos/{slug}/brief", json={"angle": 2, "then_render": True}).status_code == 200
+    jobs.wait_idle()
+    assert calls["script"] == 1 and calls["render"] == [None]
+    assert client.get(f"/api/videos/{slug}").json()["status"] == "rendered"
+
+
+def test_render_all_queues_only_ready_videos(env):
+    client, jobs, calls, s = env
+    ready1, ready2 = create(client, jobs), create(client, jobs)
+    r = client.post("/api/videos", json={"topic": "chưa chọn góc"})
+    jobs.wait_idle()
+    out = client.post("/api/render-all").json()
+    jobs.wait_idle()
+    assert sorted(out["queued"]) == sorted([ready1, ready2]) and len(calls["render"]) == 2
+
+
+def test_extend_check_and_rewrite_endpoints(env, tmp_path):
+    client, jobs, calls, s = env
+    seen = []
+    from vidgen.web.app import create_app
+    app2 = TestClient(create_app(
+        settings=lambda: s, jobs=jobs,
+        script_runner=lambda d, st: write_atomic(d / "script.json", SCRIPT.model_dump_json()),
+        extend_runner=lambda d, st: seen.append("extend"),
+        check_runner=lambda d, st: (seen.append("check"),
+                                    (d / "factcheck.json").write_text('{"checked": true, "issues": []}')),
+        rewriter=lambda d, st, sid, narration, instruction: {"narration": f"{narration}!", "visual_query": "q"}))
+    slug = create(app2, jobs)
+    assert app2.post(f"/api/videos/{slug}/extend").status_code == 200
+    jobs.wait_idle()
+    assert app2.post(f"/api/videos/{slug}/check").status_code == 200
+    jobs.wait_idle()
+    assert seen == ["extend", "check"]
+    assert app2.get(f"/api/videos/{slug}").json()["factcheck"] == {"checked": True, "issues": []}
+    r = app2.post(f"/api/videos/{slug}/scenes/1/rewrite", json={"narration": "Một", "instruction": "ngắn hơn"})
+    assert r.json() == {"narration": "Một!", "visual_query": "q"}
+
+
+def test_regenerate_brief_runs_brief_again(env):
+    client, jobs, _, s = env
+    r = client.post("/api/videos", json={"topic": "bạch tuộc"})
+    jobs.wait_idle()
+    slug = r.json()["slug"]
+    before = (s.pipeline.output_dir / slug / "brief.json").stat().st_mtime_ns
+    assert client.post(f"/api/videos/{slug}/brief/regenerate").status_code == 200
+    jobs.wait_idle()
+    assert (s.pipeline.output_dir / slug / "brief.json").stat().st_mtime_ns >= before
+    assert client.get(f"/api/videos/{slug}").json()["job"]["kind"] == "brief"

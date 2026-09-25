@@ -179,9 +179,73 @@ def write_script(out_dir: Path, s: Settings) -> None:
     state = _load_state(out_dir)
     t = time.time()
     _script(Job(out_dir, s, state["topic"]), state["format"], state["lang"])
+    _replace_script_done(out_dir, s, state, t)
+
+
+def _replace_script_done(out_dir: Path, s: Settings, state: dict, started: float) -> None:
+    """Bookkeeping after script.json was (re)written by the pipeline: record its hash, then fact-check."""
     state["script_hash"] = _hash(out_dir / "script.json")
-    state.setdefault("timings", {})["script"] = round(time.time() - t, 1)
+    state.setdefault("timings", {})["script"] = round(time.time() - started, 1)
     _save_state(out_dir, state)
+    check_facts(out_dir, s)
+
+
+def _sources_and_angle(out_dir: Path):
+    brief = load_brief(out_dir)
+    return (brief.chosen_sources(), brief.chosen_angle()) if brief else ([], None)
+
+
+def check_facts(out_dir: Path, s: Settings) -> None:
+    """Flag scenes the sources don't support → factcheck.json. Never fails the caller: a check that
+    can't run just leaves no flags (the UI then says it wasn't checked)."""
+    from vidgen.script.factcheck import FILE, FactCheck, fact_check
+    from vidgen.script.llm import default_chain
+
+    sources, _ = _sources_and_angle(out_dir)
+    try:
+        result = fact_check(Job(out_dir, s).read_script(), sources, default_chain(s))
+    except Exception as e:
+        log.warning("fact check failed: %s", e)
+        result = FactCheck(checked=False)
+    write_atomic(out_dir / FILE, result.model_dump_json(indent=2))
+
+
+def extend_script_file(out_dir: Path, s: Settings) -> int:
+    """"Kéo dài": add scenes toward the target length. Returns words added; raises if none could be."""
+    from vidgen.script.llm import default_chain
+    from vidgen.script.writer import extend_script
+
+    script = Job(out_dir, s).read_script()
+    sources, angle = _sources_and_angle(out_dir)
+    t = time.time()
+    longer = extend_script(script, s.preset(script.format), default_chain(s), sources, angle)
+    if longer is None:
+        raise ValueError("Không thêm được nội dung (kịch bản đã đủ dài hoặc nguồn không còn dữ kiện mới)")
+    invalidate_from(out_dir, "voice")
+    write_atomic(out_dir / "script.json", longer.model_dump_json(indent=2))
+    _replace_script_done(out_dir, s, _load_state(out_dir), t)
+    return longer.word_count - script.word_count
+
+
+def rewrite_scene(out_dir: Path, s: Settings, scene_id: int, narration: str | None = None,
+                  instruction: str | None = None) -> dict:
+    """One scene rewritten by the LLM, with its neighbours and the sources as context. Nothing is saved:
+    the UI drops the result into the unsaved draft for the user to accept (Lưu) or undo."""
+    from vidgen.script.llm import default_chain
+    from vidgen.script.writer import rewrite_one
+
+    script = Job(out_dir, s).read_script()
+    idx = next((i for i, sc in enumerate(script.scenes) if sc.id == scene_id), None)
+    if idx is None:
+        raise KeyError(f"scene {scene_id} not found")
+    sources, angle = _sources_and_angle(out_dir)
+    scene = script.scenes[idx]
+    if narration:
+        scene = scene.model_copy(update={"narration": narration})
+    prev = script.scenes[idx - 1].narration if idx > 0 else ""
+    nxt = script.scenes[idx + 1].narration if idx + 1 < len(script.scenes) else ""
+    new = rewrite_one(script, scene, prev, nxt, instruction, sources, angle, default_chain(s))
+    return {"narration": new.narration, "visual_query": new.visual_query}
 
 
 BRIEF_FILE = "brief.json"

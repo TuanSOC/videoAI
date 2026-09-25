@@ -96,4 +96,5 @@ def test_write_script_drops_everything_built_from_the_old_script(tmp_path, monke
     (tmp_path / "state.json").write_text('{"topic": "t", "format": "short", "lang": "vi"}')
     monkeypatch.setattr(pipeline, "_script", lambda job, fmt, lang: write_script(tmp_path, "Mới."))
     pipeline.write_script(tmp_path, get_settings())
-    assert [p.name for p in tmp_path.iterdir() if p.name not in ("script.json", "state.json")] == []
+    left = {p.name for p in tmp_path.iterdir()} - {"script.json", "state.json", "factcheck.json"}
+    assert left == set()
