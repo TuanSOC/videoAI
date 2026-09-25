@@ -1,0 +1,29 @@
+output_dir: output
+cache_dir: cache
+
+formats:
+  short:
+    width: 1080
+    height: 1920
+    fps: 30
+    target_seconds: [45, 75]
+    max_ai_video: 1   # tuned for 8GB VRAM (RTX 4060 Laptop)
+  long:
+    width: 1920
+    height: 1080
+    fps: 30
+    target_seconds: [480, 900]
+    max_ai_video: 2
+
+voices:
+  vi: vi-VN-HoaiMyNeural
+  en: en-US-AndrewMultilingualNeural
+
+llm:
+  gemini_model: gemini-flash-latest
+  ollama_model: qwen2.5:7b
+
+whisper:
+  model: small
+  device: cuda
+  compute_type: float16
