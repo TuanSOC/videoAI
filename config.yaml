@@ -20,7 +20,7 @@ voices:
   en: en-US-AndrewMultilingualNeural
 
 llm:
-  gemini_model: gemini-flash-latest
+  gemini_model: gemini-2.5-flash
   ollama_model: qwen2.5:7b
 
 ai:

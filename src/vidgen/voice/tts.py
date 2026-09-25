@@ -16,7 +16,7 @@ class TTSError(RuntimeError):
     pass
 
 
-async def synth_edge(text: str, voice: str, out: Path, attempts: int = 3) -> list[WordTiming]:
+async def synth_edge(text: str, voice: str, out: Path, attempts: int = 4) -> list[WordTiming]:
     """Write MP3 to `out`; return word timings relative to the start of that file."""
     for attempt in range(1, attempts + 1):
         try:
@@ -40,5 +40,5 @@ async def synth_edge(text: str, voice: str, out: Path, attempts: int = 3) -> lis
                     f"edge-tts failed for voice {voice}: {e}. "
                     "Check internet access; edge-tts is an unofficial Microsoft endpoint."
                 ) from e
-            await asyncio.sleep(2 * attempt)
+            await asyncio.sleep(2 ** attempt)  # 2, 4, 8s: throttling clears within seconds
     raise AssertionError("unreachable")

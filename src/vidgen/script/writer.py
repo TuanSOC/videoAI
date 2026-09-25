@@ -15,6 +15,7 @@ LANG_NAMES = {"vi": "Vietnamese", "en": "English"}
 # Spoken rate of edge-tts neural voices; Vietnamese counts space-separated syllables.
 WORDS_PER_SECOND = {"vi": 3.3, "en": 2.5}
 MAX_SCENE_WORDS = 25
+MIN_SCENE_WORDS = 5
 SECONDS_PER_CHAPTER = 90
 
 
@@ -126,7 +127,8 @@ def _pieces(text: str, max_words: int) -> list[str]:
 
 
 def split_narration(text: str, max_words: int = MAX_SCENE_WORDS) -> list[str]:
-    """Greedily group sentence/clause pieces into chunks of at most max_words."""
+    """Greedily group sentence/clause pieces into chunks of at most max_words, then fold fragments
+    shorter than MIN_SCENE_WORDS into a neighbour (a 2-word scene flashes by in under a second)."""
     chunks: list[str] = []
     current: list[str] = []
     for piece in _pieces(text, max_words):
@@ -136,7 +138,22 @@ def split_narration(text: str, max_words: int = MAX_SCENE_WORDS) -> list[str]:
         current.append(piece)
     if current:
         chunks.append(" ".join(current))
-    return chunks
+
+    merged: list[str] = []
+    carry = ""
+    for chunk in chunks:
+        chunk = f"{carry} {chunk}".strip() if carry else chunk
+        carry = ""
+        if len(chunk.split()) < MIN_SCENE_WORDS:
+            carry = chunk
+        else:
+            merged.append(chunk)
+    if carry:
+        if merged:
+            merged[-1] = f"{merged[-1]} {carry}"
+        else:
+            merged.append(carry)
+    return merged
 
 
 def postprocess(scenes: list[Scene], max_ai_video: int) -> list[Scene]:

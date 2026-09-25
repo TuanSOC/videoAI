@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 WORDS = TypeAdapter(list[WordTiming])
 GAP_SECONDS = 0.15
 SAMPLE_RATE = 24000
-CONCURRENCY = 4
+CONCURRENCY = 1  # sequential requests prevent edge-tts websocket throttling
 
 Synth = Callable[[str, str, Path], Awaitable[list[WordTiming]]]
 Aligner = Callable[[Path, str], list[WordTiming]]

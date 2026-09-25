@@ -7,6 +7,7 @@
 
 import logging
 import os
+import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -30,9 +31,11 @@ def score(c: Candidate, orientation: str, scene_seconds: float) -> int:
 
 
 def fallback_queries(query: str) -> list[str]:
-    """Full query first, then shorter ones: stock search is literal and misses on long phrases."""
-    words = query.split()
-    out = [query]
+    """Each comma-separated idea on its own (LLMs often list several), then shorter forms of the first:
+    stock search is literal and misses on long phrases."""
+    parts = [p.strip() for p in re.split(r"[,;]", query) if p.strip()] or [query]
+    out = list(parts)
+    words = parts[0].split()
     if len(words) > 2:
         out.append(" ".join(words[:2]))
     if len(words) > 1:

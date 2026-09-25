@@ -143,5 +143,17 @@ def download(url: str, cache_dir: Path, http: httpx.Client) -> Path:
         with tmp.open("wb") as fh:
             for chunk in resp.iter_bytes(1 << 16):
                 fh.write(chunk)
-    tmp.replace(dest)
+    _replace_with_retry(tmp, dest)
     return dest
+
+
+def _replace_with_retry(src: Path, dest: Path, attempts: int = 8) -> None:
+    """Windows antivirus briefly locks freshly written files (WinError 32); wait it out."""
+    for attempt in range(attempts):
+        try:
+            src.replace(dest)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.1 * 2 ** attempt)  # 0.1s … 12.8s total

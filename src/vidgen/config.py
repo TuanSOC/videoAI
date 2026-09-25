@@ -75,6 +75,25 @@ class Settings(BaseModel):
         return p if p.is_absolute() else ROOT / p
 
 
+SECRET_KEYS = ("GEMINI_API_KEY", "PEXELS_API_KEY", "PIXABAY_API_KEY", "COMFYUI_URL", "OLLAMA_URL")
+
+
+def update_env_file(values: dict[str, str], env_file: Path = ROOT / ".env") -> None:
+    """Set KEY=value lines in .env, keeping unrelated lines and comments; then drop cached settings."""
+    lines = env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []
+    pending = {k: v.strip() for k, v in values.items() if k in SECRET_KEYS}
+    out = []
+    for line in lines:
+        key = line.split("=", 1)[0].strip()
+        if key in pending:
+            out.append(f"{key}={pending.pop(key)}")
+        else:
+            out.append(line)
+    out += [f"{k}={v}" for k, v in pending.items()]
+    env_file.write_text("\n".join(out) + "\n", encoding="utf-8")
+    get_settings.cache_clear()
+
+
 @lru_cache
 def get_settings(config_file: Path = ROOT / "config.yaml") -> Settings:
     data = yaml.safe_load(config_file.read_text(encoding="utf-8"))

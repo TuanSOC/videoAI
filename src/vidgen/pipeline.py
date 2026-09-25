@@ -143,14 +143,31 @@ def new_output_dir(topic: str, s: Settings, today: date | None = None) -> Path:
     return out
 
 
-def create_script(topic: str, fmt: str, lang: str, s: Settings) -> Path:
+def init_video(topic: str, fmt: str, lang: str, s: Settings) -> Path:
+    """Create the output dir and record the request, before any slow work (the web UI lists it at once)."""
     out_dir = new_output_dir(topic, s)
-    job = Job(out_dir, s, topic)
-    t = time.time()
-    _script(job, fmt, lang)
-    _save_state(out_dir, {"topic": topic, "script_hash": _hash(out_dir / "script.json"),
-                          "timings": {"script": round(time.time() - t, 1)}})
+    _save_state(out_dir, {"topic": topic, "format": fmt, "lang": lang})
     return out_dir
+
+
+def write_script(out_dir: Path, s: Settings) -> None:
+    """(Re)generate script.json from the topic/format/lang recorded by init_video."""
+    state = _load_state(out_dir)
+    t = time.time()
+    _script(Job(out_dir, s, state["topic"]), state["format"], state["lang"])
+    state["script_hash"] = _hash(out_dir / "script.json")
+    state.setdefault("timings", {})["script"] = round(time.time() - t, 1)
+    _save_state(out_dir, state)
+
+
+def create_script(topic: str, fmt: str, lang: str, s: Settings) -> Path:
+    out_dir = init_video(topic, fmt, lang, s)
+    write_script(out_dir, s)
+    return out_dir
+
+
+def load_state(out_dir: Path) -> dict:
+    return _load_state(out_dir)
 
 
 def run_stages(out_dir: Path, s: Settings, force: str | None = None,

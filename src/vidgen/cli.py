@@ -99,6 +99,27 @@ def resume(
 
 
 @app.command()
+def ui(
+    port: int = typer.Option(8000, "--port", "-p"),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the browser automatically"),
+) -> None:
+    """Start the local web studio at http://127.0.0.1:PORT."""
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from vidgen.web.app import create_app
+
+    url = f"http://127.0.0.1:{port}"
+    console.print(f"vidgen studio → [bold]{url}[/]  (Ctrl+C to stop)")
+    if open_browser:
+        threading.Timer(1.0, webbrowser.open, args=(url,)).start()
+    # 127.0.0.1 only: the API can write .env and delete videos, never expose it on the network
+    uvicorn.run(create_app(), host="127.0.0.1", port=port, log_level="warning")
+
+
+@app.command()
 def version() -> None:
     """Print version."""
     from vidgen import __version__

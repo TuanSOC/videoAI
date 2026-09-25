@@ -54,6 +54,18 @@ def test_split_long_sentence_without_punctuation():
     assert [len(p.split()) for p in parts] == [25, 25, 10]
 
 
+def test_split_folds_tiny_fragment_into_neighbour():
+    # real Gemini case: "Thực tế," + 24-word clause used to become a 2-word scene
+    text = "Thực tế, " + " ".join(["từ"] * 24) + "."
+    parts = writer.split_narration(text)
+    assert len(parts) == 1 and parts[0].startswith("Thực tế,")
+
+
+def test_split_tiny_last_fragment_joins_previous():
+    text = " ".join(["a"] * 20) + ". Hết rồi."
+    assert writer.split_narration(text, max_words=20) == [" ".join(["a"] * 20) + ". Hết rồi."]
+
+
 def test_postprocess_drops_empty_narration():
     out = writer.postprocess([Scene(id=0, **scene("  ")), Scene(id=0, **scene("Hi."))], 1)
     assert [s.narration for s in out] == ["Hi."]

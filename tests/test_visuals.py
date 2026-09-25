@@ -54,6 +54,27 @@ def test_pixabay_skips_empty_variants(tmp_path):
     assert c.download_url == "https://x/m.mp4" and c.width == 1280
 
 
+def test_replace_retries_on_windows_lock(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from vidgen.visuals import stock
+
+    src, dest = tmp_path / "a.part", tmp_path / "a.mp4"
+    src.write_bytes(b"x")
+    real, calls = Path.replace, []
+
+    def flaky(self, target):
+        calls.append(1)
+        if len(calls) < 3:
+            raise PermissionError(32, "being used by another process")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky)
+    monkeypatch.setattr(stock.time, "sleep", lambda s: None)
+    stock._replace_with_retry(src, dest)
+    assert dest.read_bytes() == b"x" and len(calls) == 3
+
+
 def cand(uid, w=1080, h=1920, dur=10.0, kind="video"):
     return Candidate(uid, kind, f"https://x/{uid}.mp4", f"https://page/{uid}", w, h, dur, "a", "pexels", "L")
 
@@ -68,6 +89,9 @@ def test_fallback_queries():
     assert sel.fallback_queries("old ship wreck underwater") == \
         ["old ship wreck underwater", "old ship", "underwater"]
     assert sel.fallback_queries("ocean") == ["ocean"]
+    # real Gemini output lists several ideas: each becomes its own query
+    assert sel.fallback_queries("ocean map, red triangle outline, compass")[:3] == \
+        ["ocean map", "red triangle outline", "compass"]
 
 
 class FakeStock:

@@ -2,6 +2,7 @@
 
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import httpx
@@ -27,7 +28,7 @@ def _run(cmd: list[str]) -> str:
 
 def _http_ok(url: str) -> bool:
     try:
-        return httpx.get(url, timeout=3).status_code == 200
+        return httpx.get(url, timeout=1.5).status_code == 200
     except httpx.HTTPError:
         return False
 
@@ -51,9 +52,12 @@ def run_checks(s: Settings) -> list[Check]:
     has_stock = bool(sec.pexels_api_key or sec.pixabay_api_key)
     checks.append(Check("PEXELS/PIXABAY key", has_stock, "set" if has_stock else "missing → no stock footage"))
 
-    comfy = _http_ok(f"{sec.comfyui_url}/system_stats")
+    # probe both local services at once: on Windows a closed port takes ~2s to refuse
+    with ThreadPoolExecutor(2) as pool:
+        comfy_f = pool.submit(_http_ok, f"{sec.comfyui_url}/system_stats")
+        ollama_f = pool.submit(_http_ok, f"{sec.ollama_url}/api/tags")
+        comfy, ollama = comfy_f.result(), ollama_f.result()
     checks.append(Check("ComfyUI", comfy, sec.comfyui_url if comfy else "offline → no AI image/video", required=False))
-    ollama = _http_ok(f"{sec.ollama_url}/api/tags")
     checks.append(Check("Ollama", ollama, sec.ollama_url if ollama else "offline → no LLM fallback", required=False))
     has_llm = bool(sec.gemini_api_key) or ollama
     checks.append(Check("LLM available", has_llm, "ok" if has_llm else "set GEMINI_API_KEY or start Ollama"))
