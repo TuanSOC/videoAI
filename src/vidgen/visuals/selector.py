@@ -28,6 +28,7 @@ MIN_SHORT_SIDE = 720
 MAX_ALTERNATES = 3
 DOWNLOAD_WORKERS = 4
 MAX_REJECTED = 50
+EXTRA_AFTER = 5.0  # seconds: longer scenes also get their next-best clip, cut in as a second shot
 
 
 class SwapError(RuntimeError):
@@ -167,6 +168,7 @@ class Selector:
         self.judge = judge      # optional LLM tie-breaker for weak matches
         self.pool: ThreadPoolExecutor | None = None  # set while sourcing a whole video
         self.pending: list[tuple[Scene, Asset, Future]] = []
+        self.extra_pending: list[tuple[Asset, str, Future]] = []
 
     def pick(self, scene: Scene, seconds: float) -> Asset:
         self.visuals_dir.mkdir(parents=True, exist_ok=True)
@@ -245,7 +247,13 @@ class Selector:
                     ranked.insert(0, ranked.pop(idx))
             while ranked:
                 best, ranked = ranked[0], ranked[1:]
-                asset = self._use(scene, best, query, ranked[:MAX_ALTERNATES])
+                # whole-video sourcing only: a swap replaces the main clip and drops any extra
+                long_scene = self.pool is not None and seconds > EXTRA_AFTER
+                extra = next((c for c in ranked if c.kind == kind), None) if long_scene else None
+                rest = [c for c in ranked if c is not extra]
+                asset = self._use(scene, best, query, rest[:MAX_ALTERNATES])
+                if asset and extra is not None:
+                    self._use_extra(scene, asset, extra)
                 if asset:
                     return asset
         return None
@@ -270,6 +278,13 @@ class Selector:
             return None
         return asset
 
+    def _use_extra(self, scene: Scene, asset: Asset, c: Candidate) -> None:
+        self.used.add(c.uid)
+        dest = self.visuals_dir / f"scene_{scene.id:03d}b{url_suffix(c.download_url)}"
+        rel = f"visuals/{dest.name}"
+        asset.extra.append(rel)
+        self.extra_pending.append((asset, rel, self.pool.submit(self._fetch, c.download_url, dest)))
+
     def _fetch(self, url: str, dest: Path) -> None:
         _link_or_copy(download(url, self.cache_dir, self.http), dest)
 
@@ -277,6 +292,13 @@ class Selector:
         """Wait for background downloads; a failed one falls back to that scene's alternates
         (downloaded synchronously), then to a placeholder."""
         pending, self.pending = self.pending, []
+        extras, self.extra_pending = self.extra_pending, []
+        for asset, rel, future in extras:
+            try:
+                future.result()
+            except Exception as e:  # an extra shot is optional: just drop it
+                log.warning("scene %d: extra clip download failed (%s)", asset.scene_id, e)
+                asset.extra.remove(rel)
         failed: dict[int, tuple[Scene, Asset]] = {}
         for scene, asset, future in pending:
             try:

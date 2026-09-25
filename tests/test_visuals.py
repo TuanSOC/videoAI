@@ -406,3 +406,19 @@ def test_parallel_downloads_and_failed_one_falls_back_to_alternate(tmp_path, mon
         assets = s.finish([first, second])
     assert [a.uid for a in assets] == ["b", "d"]      # scene 1 repaired with its next alternate
     assert (tmp_path / "visuals" / "scene_001.mp4").exists()
+
+
+def test_long_scene_gets_extra_clip_short_scene_does_not(tmp_path, fake_download):
+    from concurrent.futures import ThreadPoolExecutor
+
+    stock = FakeStock(videos={"stormy ocean aerial": [cand("a"), cand("b"), cand("c"), cand("d")]})
+    s = make_selector(tmp_path, [stock])
+    with ThreadPoolExecutor(2) as pool:
+        s.pool = pool
+        long_ = s.pick(scene(1), 8)
+        short = s.pick(scene(2), 3)
+        assets = s.finish([long_, short])
+    assert assets[0].extra == ["visuals/scene_001b.mp4"] and assets[1].extra == []
+    assert (tmp_path / "visuals" / "scene_001b.mp4").exists()
+    assert "b" not in [x.uid for x in assets[0].alternates]  # the extra clip isn't offered as a swap
+    assert assets[1].uid == "c"                              # nor reused for another scene

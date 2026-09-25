@@ -1,7 +1,8 @@
 import pytest
 
 from vidgen.assemble import subtitles as subs
-from vidgen.assemble.clips import frame_counts, segment_args
+from vidgen.assemble.clips import Shot, frame_counts, plan_shots, shot_args
+from vidgen.assemble.focus import Focus
 from vidgen.assemble.render import audio_filter, final_args
 from vidgen.config import get_settings
 from vidgen.metadata import credit_lines
@@ -77,14 +78,71 @@ def test_frame_counts_do_not_accumulate_rounding():
     assert sum(counts) == round(tl.duration * 30)
 
 
-def test_segment_args_per_kind(tmp_path):
+def shots_for(durations, assets, clip_seconds, fmt="short"):
+    from pathlib import Path
+
+    t, scenes = 0.0, []
+    for i, d in enumerate(durations, 1):
+        scenes.append(SceneAudio(scene_id=i, path="", start=t, duration=d, words=[]))
+        t += d
+    return plan_shots(Timeline(scenes=scenes), assets, get_settings().preset(fmt), fmt, Path("o"),
+                      {Path("o") / k: v for k, v in clip_seconds.items()})
+
+
+def test_plan_shots_splits_long_scenes_and_keeps_frames():
+    assets = [Asset(scene_id=1, path="v1.mp4", kind="video", source="pexels"),
+              Asset(scene_id=2, path="v2.mp4", kind="video", source="pexels", extra=["v2b.mp4"]),
+              Asset(scene_id=3, path="", kind="color", source="placeholder")]
+    shots = shots_for([2.0, 8.0, 3.0], assets, {"v1.mp4": 10.0, "v2.mp4": 20.0, "v2b.mp4": 6.0})
+    fps = get_settings().preset("short").fps
+    assert sum(s.frames for s in shots) == round(13.0 * fps)            # no drift from splitting
+    assert [s.scene_id for s in shots] == [1, 2, 2, 2, 3]                # 8 s → 3 shots of ≤3.5 s
+    s2 = [s for s in shots if s.scene_id == 2]
+    assert [s.src.name for s in s2] == ["v2.mp4", "v2b.mp4", "v2.mp4"]  # the extra clip is cut in
+    assert s2[0].offset < s2[2].offset                                   # same clip, different part
+    assert s2[0].punch == 0 and s2[2].punch > 0                          # ...and framed tighter
+    assert shots[0].offset >= 0.6                                        # lead-in skipped
+    assert s2[0].transition_in and not shots[-1].transition_in           # no fade into a placeholder
+    assert len({s.motion for s in s2}) > 1
+
+
+def test_plan_shots_short_clip_starts_at_zero():
+    shots = shots_for([3.0], [Asset(scene_id=1, path="v.mp4", kind="video", source="pexels")], {"v.mp4": 3.1})
+    assert len(shots) == 1 and shots[0].offset == 0.0
+
+
+def test_shot_args_crossfade_and_grade(tmp_path):
+    from pathlib import Path
+
     p = get_settings().preset("short")
-    video = segment_args(Asset(scene_id=1, path="v.mp4", kind="video", source="pexels"), tmp_path, 45, p, tmp_path / "o.mp4")
-    assert "-stream_loop" in video and "45" in video
-    image = segment_args(Asset(scene_id=1, path="i.jpg", kind="image", source="flux"), tmp_path, 45, p, tmp_path / "o.mp4")
-    assert any("zoompan" in a for a in image)
-    color = segment_args(Asset(scene_id=1, path="", kind="color", source="placeholder"), tmp_path, 45, p, tmp_path / "o.mp4")
-    assert any(a.startswith("color=") for a in color)
+    a = Shot(1, 0, "video", Path("a.mp4"), 1.0, 90, "push", focus=Focus(0.3, 0.05))
+    b = Shot(2, 0, "image", Path("b.jpg"), 0.0, 90, "pan_l", transition_in=True)
+    args = shot_args(a, b, p, tmp_path / "o.mp4")
+    graph = args[args.index("-filter_complex") + 1]
+    assert "xfade=transition=fade" in graph and args.count("-i") == 2
+    assert "x=(iw-ow)*0.300" in graph and "brightness=0.050" in graph and "vignette" in graph
+    assert args[args.index("-frames:v") + 1] == "90"
+    # the incoming shot continues where the fade left off: later source offset, motion already started
+    b_args = shot_args(b, None, p, tmp_path / "o.mp4")
+    assert "xfade" not in " ".join(b_args) and "(on+9)" in " ".join(b_args)
+    color = shot_args(Shot(3, 0, "color", None, 0.0, 30, "none"), None, p, tmp_path / "o.mp4")
+    assert any(x.startswith("color=") for x in color)
+
+
+def test_focus_finds_subject_and_brightness(tmp_path):
+    import cv2
+    import numpy as np
+
+    from vidgen.assemble.focus import analyse, best_window
+
+    assert best_window(np.array([0, 0, 0, 5, 5, 0.0]), 1 / 3) == 0.75
+    img = np.full((360, 640, 3), 20, np.uint8)                   # dark landscape frame
+    cv2.rectangle(img, (500, 100), (620, 300), (255, 255, 255), 3)  # detail near the right edge
+    path = tmp_path / "ảnh.jpg"                                   # unicode path
+    cv2.imencode(".jpg", img)[1].tofile(str(path))
+    f = analyse(path, "image", 0, 1, 9 / 16)
+    assert f.x > 0.6 and f.brightness > 0
+    assert analyse(tmp_path / "missing.mp4", "video", 0, 1, 9 / 16) == Focus()
 
 
 @pytest.mark.parametrize("music", [None, "m.mp3"])

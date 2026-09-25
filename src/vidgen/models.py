@@ -120,6 +120,7 @@ class Asset(BaseModel):
     query: str = ""    # search that found it
     alternates: list[Alternate] = []
     rejected: list[str] = []  # clips the user swapped away from this scene (uid or page url)
+    extra: list[str] = []     # second clip(s) for long scenes, cut in as another shot
 
     @property
     def ident(self) -> str:

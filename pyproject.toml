@@ -17,6 +17,7 @@ dependencies = [
     "python-slugify>=8",
     "fastapi>=0.115",
     "uvicorn>=0.30",
+    "opencv-python-headless>=4.9",
 ]
 
 [project.scripts]

@@ -1,7 +1,7 @@
 ---
 phase: 1
 title: Shot Pacing (V1)
-status: in-progress
+status: completed
 effort: ''
 ---
 

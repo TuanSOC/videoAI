@@ -1,8 +1,8 @@
 ---
 phase: 2
-title: "Transitions and Motion (V2)"
-status: pending
-effort: ""
+title: Transitions and Motion (V2)
+status: completed
+effort: ''
 ---
 
 # Phase 2: Transitions and Motion (V2)

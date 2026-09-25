@@ -43,7 +43,7 @@ def final_args(duration: float, music: Path | None) -> list[str]:
 
 def render_video(script: Script, timeline: Timeline, assets: list[Asset], preset: FormatPreset,
                  out_dir: Path, seed: str) -> Path:
-    segments = render_segments(assets, timeline, preset, out_dir)
+    segments = render_segments(assets, timeline, preset, out_dir, script.format)
     (out_dir / "segments" / "list.txt").write_text(
         "".join(f"file '{p.name}'\n" for p in segments), encoding="utf-8")
     (out_dir / "subs.ass").write_text(build_ass(script, timeline, preset), encoding="utf-8")
