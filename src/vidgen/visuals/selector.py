@@ -11,6 +11,7 @@ import re
 import shutil
 from collections import Counter
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -18,13 +19,14 @@ from pydantic import BaseModel
 
 from vidgen.config import FormatPreset, Settings
 from vidgen.models import Alternate, Asset, Scene, Script, Timeline
-from vidgen.visuals.stock import Candidate, Pexels, Pixabay, StockClient, download
+from vidgen.visuals.stock import Candidate, Pexels, Pixabay, StockClient, download, url_suffix
 
 log = logging.getLogger(__name__)
 MIN_SHORT_SIDE = 720
 
 
 MAX_ALTERNATES = 3
+DOWNLOAD_WORKERS = 4
 MAX_REJECTED = 50
 
 
@@ -148,6 +150,8 @@ class Selector:
         self.used: set[str] = set()
         self.subject = subject  # what the whole video is about, see video_subject()
         self.judge = judge      # optional LLM tie-breaker for weak matches
+        self.pool: ThreadPoolExecutor | None = None  # set while sourcing a whole video
+        self.pending: list[tuple[Scene, Asset, Future]] = []
 
     def pick(self, scene: Scene, seconds: float) -> Asset:
         self.visuals_dir.mkdir(parents=True, exist_ok=True)
@@ -231,18 +235,54 @@ class Selector:
 
     def _use(self, scene: Scene, c: Candidate | Alternate, query: str,
              alternates: list[Candidate | Alternate]) -> Asset | None:
-        """Download a candidate into visuals/scene_NNN.ext; keep the next-best ones for later swaps."""
+        """Download a candidate into visuals/scene_NNN.ext; keep the next-best ones for later swaps.
+        With a download pool (whole-video sourcing) the download runs in the background and failures
+        are repaired in finish(); without one (a single swap) it happens right here."""
         self.used.add(c.uid)
+        dest = self.visuals_dir / f"scene_{scene.id:03d}{url_suffix(c.download_url)}"
+        asset = Asset(scene_id=scene.id, path=f"visuals/{dest.name}", kind=c.kind, source=c.source,
+                      url=c.page_url, author=c.author, license=c.license, uid=c.uid, query=query,
+                      alternates=[_alternate(a) for a in alternates])
+        if self.pool is not None:
+            self.pending.append((scene, asset, self.pool.submit(self._fetch, c.download_url, dest)))
+            return asset
         try:
-            cached = download(c.download_url, self.cache_dir, self.http)
+            self._fetch(c.download_url, dest)
         except httpx.HTTPError as e:
             log.warning("download failed %s: %s", c.download_url, e)
             return None
-        dest = self.visuals_dir / f"scene_{scene.id:03d}{cached.suffix}"
-        _link_or_copy(cached, dest)
-        return Asset(scene_id=scene.id, path=f"visuals/{dest.name}", kind=c.kind, source=c.source,
-                     url=c.page_url, author=c.author, license=c.license, uid=c.uid, query=query,
-                     alternates=[_alternate(a) for a in alternates])
+        return asset
+
+    def _fetch(self, url: str, dest: Path) -> None:
+        _link_or_copy(download(url, self.cache_dir, self.http), dest)
+
+    def finish(self, assets: list[Asset]) -> list[Asset]:
+        """Wait for background downloads; a failed one falls back to that scene's alternates
+        (downloaded synchronously), then to a placeholder."""
+        pending, self.pending = self.pending, []
+        failed: dict[int, tuple[Scene, Asset]] = {}
+        for scene, asset, future in pending:
+            try:
+                future.result()
+            except Exception as e:  # network errors, disk errors
+                log.warning("scene %d: download failed (%s), trying alternates", scene.id, e)
+                failed[scene.id] = (scene, asset)
+        if not failed:
+            return assets
+        pool, self.pool = self.pool, None
+        try:
+            fixed = {}
+            for sid, (scene, asset) in failed.items():
+                repl = None
+                alts = list(asset.alternates)
+                while alts and repl is None:
+                    alt, alts = alts[0], alts[1:]
+                    if alt.uid not in self.used:
+                        repl = self._use(scene, alt, asset.query, alts)
+                fixed[sid] = repl or Asset(scene_id=sid, path="", kind="color", source="placeholder")
+            return [fixed.get(a.scene_id, a) for a in assets]
+        finally:
+            self.pool = pool
 
     def swap(self, scene: Scene, seconds: float, current: Asset, used: set[str],
              query: str | None = None) -> Asset:
@@ -333,7 +373,12 @@ def source_visuals(script: Script, timeline: Timeline, preset: FormatPreset, out
     selector = selector or build_selector(script, preset, out_dir, s)
     seconds = {sa.scene_id: sa.duration for sa in timeline.scenes}
     try:
-        return [selector.pick(scene, seconds.get(scene.id, 5.0)) for scene in script.scenes]
+        # choose sequentially (cheap, cached searches; keeps clips unique), download in parallel
+        with ThreadPoolExecutor(DOWNLOAD_WORKERS) as pool:
+            selector.pool = pool
+            assets = [selector.pick(scene, seconds.get(scene.id, 5.0)) for scene in script.scenes]
+            return selector.finish(assets)
     finally:
+        selector.pool = None
         if selector.ai is not None:
             selector.ai.client.free()

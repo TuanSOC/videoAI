@@ -1,12 +1,18 @@
-"""Per-scene TTS → padded WAVs → one voice.wav + timeline.json with global word timings.
+"""Script → voice.wav + timeline.json with global word timings.
 
-Each scene is decoded to PCM before measuring, so durations are sample-exact and
-caption timing cannot drift across 100+ scenes the way summed MP3 estimates would.
+Scenes are voiced in groups (one TTS request per ~60 words, 4 in parallel): one request per scene
+was 3-4x slower and bursts of small requests got throttled. Word boundaries are matched back to their
+scenes and each group's audio is cut at the middle of the pause between scenes. If a group's words
+can't be matched (unusual tokenisation), that group falls back to one request per scene.
+
+Every scene ends up as a padded PCM WAV measured sample-exactly, so caption timing cannot drift
+across 100+ scenes the way summed MP3 estimates would.
 """
 
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import TypeAdapter
@@ -14,14 +20,15 @@ from pydantic import TypeAdapter
 from vidgen import ffmpeg
 from vidgen.config import Settings
 from vidgen.fsutil import write_atomic
-from vidgen.models import SceneAudio, Script, Timeline, WordTiming
+from vidgen.models import Scene, SceneAudio, Script, Timeline, WordTiming
 from vidgen.voice.tts import TTSError, synth_edge
 
 log = logging.getLogger(__name__)
 WORDS = TypeAdapter(list[WordTiming])
 GAP_SECONDS = 0.15
 SAMPLE_RATE = 24000
-CONCURRENCY = 1  # sequential requests prevent edge-tts websocket throttling
+MAX_GROUP_WORDS = 60   # a short (~160 words) → 3-4 parallel requests
+GROUP_CONCURRENCY = 4  # measured: 4 concurrent grouped requests, no throttling (per-scene bursts were)
 
 Synth = Callable[[str, str, Path], Awaitable[list[WordTiming]]]
 Aligner = Callable[[Path, str], list[WordTiming]]
@@ -39,23 +46,114 @@ def build_timeline(scene_ids: list[int], paths: list[str], durations: list[float
     return Timeline(scenes=scenes)
 
 
-async def _synth_all(script: Script, voice: str, out_dir: Path, synth: Synth) -> list[list[WordTiming]]:
-    sem = asyncio.Semaphore(CONCURRENCY)
+def _bare(token: str) -> str:
+    return "".join(ch for ch in token.casefold() if ch.isalnum())
 
-    async def one(scene) -> list[WordTiming]:
-        mp3 = out_dir / f"scene_{scene.id:03d}.mp3"
-        sidecar = mp3.with_suffix(".words.json")
-        if mp3.exists() and sidecar.exists():  # finished in an earlier, partly failed run
-            return WORDS.validate_json(sidecar.read_bytes())
-        async with sem:
+
+def plan_groups(scenes: list[Scene], max_words: int = MAX_GROUP_WORDS) -> list[list[Scene]]:
+    """Consecutive scenes packed up to max_words (a longer scene gets a group of its own)."""
+    groups: list[list[Scene]] = []
+    current: list[Scene] = []
+    count = 0
+    for sc in scenes:
+        n = len(sc.narration.split())
+        if current and count + n > max_words:
+            groups.append(current)
+            current, count = [], 0
+        current.append(sc)
+        count += n
+    if current:
+        groups.append(current)
+    return groups
+
+
+def split_by_scene(scenes: list[Scene], words: list[WordTiming]) -> list[list[WordTiming]] | None:
+    """Assign a group's word boundaries to its scenes. TTS reports each word as written, but may split
+    one token in two ("AI-generated"), so boundaries are concatenated until they spell the token.
+    None when they don't line up — the caller then voices those scenes one by one."""
+    out: list[list[WordTiming]] = []
+    i = 0
+    for sc in scenes:
+        mine: list[WordTiming] = []
+        for token in filter(None, (_bare(t) for t in sc.narration.split())):
+            acc = ""
+            while len(acc) < len(token):
+                if i >= len(words):
+                    return None
+                acc += _bare(words[i].word)
+                mine.append(words[i])
+                i += 1
+            if acc != token:
+                return None
+        if not mine:
+            return None
+        out.append(mine)
+    return out if i == len(words) else None
+
+
+@dataclass
+class Piece:
+    """Where one scene's speech lives: [start, end) of a source MP3 (end None = to the end)."""
+    src: Path
+    start: float
+    end: float | None
+    words: list[WordTiming]  # relative to the source file
+
+
+def _cut(piece: Piece, wav: Path) -> None:
+    trim = f"atrim=start={piece.start:.3f}" + (f":end={piece.end:.3f}" if piece.end is not None else "")
+    ffmpeg.run(["-i", str(piece.src), "-af", f"{trim},asetpts=PTS-STARTPTS,apad=pad_dur={GAP_SECONDS}",
+                "-ar", str(SAMPLE_RATE), "-ac", "1", "-c:a", "pcm_s16le", str(wav)])
+
+
+def _save_scene(voice_dir: Path, scene: Scene, piece: Piece) -> None:
+    """Write scene_NNN.wav + its word sidecar (words local to the scene). Sidecar last = 'done' marker."""
+    wav = voice_dir / f"scene_{scene.id:03d}.wav"
+    _cut(piece, wav)
+    local = [w.model_copy(update={"start": w.start - piece.start, "end": w.end - piece.start}) for w in piece.words]
+    (voice_dir / f"scene_{scene.id:03d}.words.json").write_bytes(WORDS.dump_json(local))
+
+
+def _done(voice_dir: Path, scene: Scene) -> bool:
+    return (voice_dir / f"scene_{scene.id:03d}.wav").exists() and \
+        (voice_dir / f"scene_{scene.id:03d}.words.json").exists()
+
+
+async def _voice_group(group: list[Scene], voice: str, voice_dir: Path, synth: Synth,
+                       sem: asyncio.Semaphore) -> None:
+    todo = [sc for sc in group if not _done(voice_dir, sc)]  # resume: finished scenes are kept
+    if not todo:
+        return
+    label = f"scenes {todo[0].id}-{todo[-1].id}" if len(todo) > 1 else f"scene {todo[0].id}"
+    async with sem:
+        split = None
+        if len(todo) > 1:
+            mp3 = voice_dir / f"group_{todo[0].id:03d}.mp3"
             try:
-                words = await synth(scene.narration, voice, mp3)
+                words = await synth(" ".join(sc.narration for sc in todo), voice, mp3)
             except TTSError as e:
-                raise TTSError(f"scene {scene.id}: {e}") from e
-        sidecar.write_bytes(WORDS.dump_json(words))
-        return words
+                raise TTSError(f"{label}: {e}") from e
+            split = split_by_scene(todo, words)
+            if split is None:
+                log.info("%s: word boundaries didn't line up, voicing scene by scene", label)
+        if split is not None:
+            for k, (sc, ws) in enumerate(zip(todo, split)):
+                start = 0.0 if k == 0 else (split[k - 1][-1].end + ws[0].start) / 2
+                end = (ws[-1].end + split[k + 1][0].start) / 2 if k + 1 < len(todo) else None
+                await asyncio.to_thread(_save_scene, voice_dir, sc, Piece(mp3, start, end, ws))
+            return
+        for sc in todo:
+            mp3 = voice_dir / f"scene_{sc.id:03d}.mp3"
+            try:
+                words = await synth(sc.narration, voice, mp3)
+            except TTSError as e:
+                raise TTSError(f"scene {sc.id}: {e}") from e
+            await asyncio.to_thread(_save_scene, voice_dir, sc, Piece(mp3, 0.0, None, words))
 
-    return await asyncio.gather(*(one(s) for s in script.scenes))
+
+async def _voice_all(script: Script, voice: str, voice_dir: Path, synth: Synth) -> None:
+    sem = asyncio.Semaphore(GROUP_CONCURRENCY)
+    await asyncio.gather(*(_voice_group(g, voice, voice_dir, synth, sem) for g in plan_groups(script.scenes)))
 
 
 def _default_aligner(s: Settings) -> Aligner:
@@ -74,20 +172,19 @@ def generate_voice(script: Script, out_dir: Path, s: Settings,
     voice = s.pipeline.voices[script.lang]
     aligner = aligner or _default_aligner(s)
 
-    words = asyncio.run(_synth_all(script, voice, voice_dir, synth))
+    asyncio.run(_voice_all(script, voice, voice_dir, synth))
 
-    ids, wav_names, durations = [], [], []
-    for i, (scene, ws) in enumerate(zip(script.scenes, words, strict=True)):
-        mp3 = voice_dir / f"scene_{scene.id:03d}.mp3"
-        wav = mp3.with_suffix(".wav")
-        ffmpeg.run(["-i", str(mp3), "-af", f"apad=pad_dur={GAP_SECONDS}",
-                    "-ar", str(SAMPLE_RATE), "-ac", "1", "-c:a", "pcm_s16le", str(wav)])
+    ids, wav_names, durations, words = [], [], [], []
+    for scene in script.scenes:
+        wav = voice_dir / f"scene_{scene.id:03d}.wav"
+        ws = WORDS.validate_json((voice_dir / f"scene_{scene.id:03d}.words.json").read_bytes())
         if not ws:
             log.info("scene %d: no TTS word timings, aligning with whisper", scene.id)
-            words[i] = aligner(mp3, script.lang)
+            ws = aligner(wav, script.lang)
         ids.append(scene.id)
         wav_names.append(f"voice/{wav.name}")
         durations.append(ffmpeg.duration(wav))
+        words.append(ws)
 
     (voice_dir / "concat.txt").write_text(
         "".join(f"file '{Path(n).name}'\n" for n in wav_names), encoding="utf-8")

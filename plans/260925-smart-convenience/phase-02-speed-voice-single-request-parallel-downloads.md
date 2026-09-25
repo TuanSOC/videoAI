@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: Speed (voice single request + parallel downloads)
-status: in-progress
+status: completed
 effort: ''
 ---
 

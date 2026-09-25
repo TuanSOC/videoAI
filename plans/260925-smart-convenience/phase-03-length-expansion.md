@@ -1,8 +1,8 @@
 ---
 phase: 3
-title: "Length Expansion"
-status: pending
-effort: ""
+title: Length Expansion
+status: in-progress
+effort: ''
 ---
 
 # Phase 3: Length Expansion

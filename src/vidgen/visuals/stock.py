@@ -138,10 +138,14 @@ class Pixabay(StockClient):
                 for h in data.get("hits", [])]
 
 
+def url_suffix(url: str) -> str:
+    path = url.split("?")[0]
+    return ".mp4" if ".mp4" in path else Path(path).suffix or ".jpg"
+
+
 def download(url: str, cache_dir: Path, http: httpx.Client) -> Path:
     """Download once into cache/files/, keyed by URL."""
-    suffix = ".mp4" if ".mp4" in url.split("?")[0] else Path(url.split("?")[0]).suffix or ".jpg"
-    dest = cache_dir / "files" / (hashlib.sha1(url.encode()).hexdigest() + suffix)
+    dest = cache_dir / "files" / (hashlib.sha1(url.encode()).hexdigest() + url_suffix(url))
     if dest.exists():
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)

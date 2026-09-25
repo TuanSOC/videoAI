@@ -369,3 +369,28 @@ def test_judge_rejecting_all_moves_on_to_simpler_query(tmp_path, fake_download):
     s.subject = "octopus"
     s.judge = lambda n, q, texts: -1 if "octopus in aquarium" in texts else None
     assert s.pick(scene(1, q="octopus den"), 5).uid == "live"
+
+
+def test_parallel_downloads_and_failed_one_falls_back_to_alternate(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    def dl(url, cache_dir, http):
+        if url.endswith("/a.mp4"):
+            raise httpx.ConnectError("reset")
+        p = tmp_path / "dl" / url.rsplit("/", 1)[-1]
+        p.parent.mkdir(exist_ok=True)
+        p.write_bytes(b"x")
+        return p
+
+    monkeypatch.setattr(sel, "download", dl)
+    stock = FakeStock(videos={"stormy ocean aerial": [cand("a"), cand("b"), cand("c")],
+                              "calm lake": [cand("d")]})
+    s = make_selector(tmp_path, [stock])
+    with ThreadPoolExecutor(4) as pool:
+        s.pool = pool
+        first = s.pick(scene(1), 5)                   # "a": download will fail in the background
+        second = s.pick(scene(2, q="calm lake"), 5)
+        assert first.uid == "a"                       # returned before the download finished
+        assets = s.finish([first, second])
+    assert [a.uid for a in assets] == ["b", "d"]      # scene 1 repaired with its next alternate
+    assert (tmp_path / "visuals" / "scene_001.mp4").exists()
