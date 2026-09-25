@@ -255,6 +255,11 @@ function renderScenes(lang, active, job) {
         <span>≈ <b>${fmtSec(total / WPS[lang])}</b></span></div>
       <span class="dirty" id="dirty" ${dirty ? "" : "hidden"}>● Chưa lưu</span>
     </div>
+    ${draft.sources?.length
+      ? `<div class="sources">Dữ kiện lấy từ: ${draft.sources.map((s) =>
+          `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>`).join(" · ")}
+          — vẫn nên đối chiếu trước khi render.</div>`
+      : `<div class="sources warn">Không tìm được nguồn tham khảo — hãy kiểm tra kỹ các dữ kiện trong kịch bản.</div>`}
     ${draft.scenes.map((s, i) => {
       const chapter = s.chapter && s.chapter !== lastChapter ? `<div class="chapter">${esc(s.chapter)}</div>` : "";
       lastChapter = s.chapter;

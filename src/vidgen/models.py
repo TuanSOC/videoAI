@@ -17,12 +17,18 @@ class Scene(BaseModel):
     chapter: str | None = None
 
 
+class SourceRef(BaseModel):
+    title: str
+    url: str
+
+
 class Script(BaseModel):
     title: str
     hook: str
     lang: Literal["vi", "en"]
     format: Literal["short", "long"]
     scenes: list[Scene] = Field(min_length=1)
+    sources: list[SourceRef] = []  # reference pages the facts were drawn from
 
     @property
     def word_count(self) -> int:

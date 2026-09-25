@@ -7,8 +7,9 @@ from string import Template
 from pydantic import BaseModel, Field
 
 from vidgen.config import Format, FormatPreset, Lang
-from vidgen.models import Scene, Script, VisualType
+from vidgen.models import Scene, Script, SourceRef, VisualType
 from vidgen.script.llm import LLMChain
+from vidgen.script.research import Source, facts_block
 
 PROMPTS = Path(__file__).parent / "prompts"
 LANG_NAMES = {"vi": "Vietnamese", "en": "English"}
@@ -59,15 +60,20 @@ def target_seconds(preset: FormatPreset) -> int:
     return (lo + hi) // 2
 
 
-def generate(topic: str, fmt: Format, lang: Lang, preset: FormatPreset, llm: LLMChain) -> Script:
+def generate(topic: str, fmt: Format, lang: Lang, preset: FormatPreset, llm: LLMChain,
+             sources: list[Source] | None = None) -> Script:
+    """`sources` are reference passages (see research.py); the prompts restrict facts to them."""
+    sources = sources or []
+    facts = facts_block(sources)
     seconds = target_seconds(preset)
     words = int(seconds * WORDS_PER_SECOND[lang])
     if fmt == "short":
-        title, hook, scenes = _generate_short(topic, lang, preset, llm, seconds, words)
+        title, hook, scenes = _generate_short(topic, lang, preset, llm, seconds, words, facts)
     else:
-        title, hook, scenes = _generate_long(topic, lang, preset, llm, seconds, words)
+        title, hook, scenes = _generate_long(topic, lang, preset, llm, seconds, words, facts)
     return Script(title=title, hook=hook, lang=lang, format=fmt,
-                  scenes=postprocess(scenes, preset.max_ai_video))
+                  scenes=postprocess(scenes, preset.max_ai_video),
+                  sources=[SourceRef(title=s.title, url=s.url) for s in sources])
 
 
 def _draft_words(draft) -> int:
@@ -88,19 +94,19 @@ def _generate_with_length(llm: LLMChain, prompt: str, schema, target_words: int)
     return retry if _draft_words(retry) > got else draft
 
 
-def _generate_short(topic, lang, preset, llm, seconds, words):
+def _generate_short(topic, lang, preset, llm, seconds, words, facts):
     prompt = _render(
-        "short.md", topic=topic, lang_name=LANG_NAMES[lang], target_words=words,
+        "short.md", topic=topic, facts=facts, lang_name=LANG_NAMES[lang], target_words=words,
         target_seconds=seconds, scene_range="8-14", max_ai_video=preset.max_ai_video,
     )
     draft = _generate_with_length(llm, prompt, ShortDraft, words)
     return draft.title, draft.hook, [Scene(id=0, **s.model_dump()) for s in draft.scenes]
 
 
-def _generate_long(topic, lang, preset, llm, seconds, words):
+def _generate_long(topic, lang, preset, llm, seconds, words, facts):
     n_chapters = max(3, round(seconds / SECONDS_PER_CHAPTER))
     outline = llm.generate(
-        _render("long_outline.md", topic=topic, lang_name=LANG_NAMES[lang],
+        _render("long_outline.md", topic=topic, facts=facts, lang_name=LANG_NAMES[lang],
                 target_minutes=round(seconds / 60), chapter_count=n_chapters),
         Outline,
     )
@@ -117,7 +123,7 @@ def _generate_long(topic, lang, preset, llm, seconds, words):
             note = "Continue smoothly from the previous chapter; no greetings or recaps."
         draft = _generate_with_length(
             llm,
-            _render("long_chapter.md", title=outline.title, outline=outline_text, chapter_index=i,
+            _render("long_chapter.md", title=outline.title, facts=facts, outline=outline_text, chapter_index=i,
                     chapter_count=len(outline.chapters), chapter_title=ch.title,
                     chapter_summary=ch.summary, position_note=note, lang_name=LANG_NAMES[lang],
                     # spread the AI-video budget: one slot per chapter for the first N chapters

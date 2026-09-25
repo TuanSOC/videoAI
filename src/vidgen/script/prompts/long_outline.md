@@ -2,6 +2,9 @@ You are a scriptwriter for a faceless documentary-style YouTube channel ("fascin
 
 Plan a $target_minutes-minute horizontal video about: $topic
 
+Reference material:
+$facts
+
 Rules:
 - Language: $lang_name.
 - `title`: compelling, under 70 characters.

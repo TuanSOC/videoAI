@@ -8,6 +8,9 @@ Write chapter $chapter_index of $chapter_count: "$chapter_title"
 Chapter summary: $chapter_summary
 $position_note
 
+Reference material:
+$facts
+
 Rules:
 - Narration language: $lang_name. Natural spoken documentary style, varied sentence length, no emojis, no stage directions, no "in this chapter".
 - About $target_words words total for this chapter.

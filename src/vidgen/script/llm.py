@@ -65,7 +65,7 @@ class OllamaProvider:
                 "think": self._think,
                 "stream": False,
                 # 8k context: prompts are <3k tokens; 16k would push an 8B model past 8GB VRAM
-                "options": {"temperature": 0.8, "num_ctx": 8192},
+                "options": {"temperature": 0.5, "num_ctx": 8192},  # lower = fewer "creative" factual slips
             },
             timeout=900,
         )

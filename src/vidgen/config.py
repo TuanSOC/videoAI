@@ -52,6 +52,7 @@ class PipelineConfig(BaseModel):
     formats: dict[str, FormatPreset]
     voices: dict[str, str]
     llm: LLMConfig = LLMConfig()
+    research: bool = True  # ground scripts in Wikipedia passages (script/research.py)
     ai: AIConfig = AIConfig()
     whisper: WhisperConfig = WhisperConfig()
 

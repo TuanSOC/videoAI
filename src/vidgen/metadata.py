@@ -79,6 +79,9 @@ def generate_metadata(script: Script, assets: list[Asset], llm: LLMChain) -> Met
     hashtags = normalize_hashtags(llm_meta.hashtags, script.format == "short")
     disclosure = DISCLOSURE[script.lang]
     description = llm_meta.description.strip() + f"\n\n{disclosure}"
+    if script.sources:
+        label = "Nguồn tham khảo" if script.lang == "vi" else "Sources"
+        description += f"\n\n{label}:\n" + "\n".join(f"- {s.title}: {s.url}" for s in script.sources)
     if credits:
         description += "\n\nFootage:\n" + "\n".join(f"- {c}" for c in credits)
     description += "\n\n" + " ".join(hashtags)

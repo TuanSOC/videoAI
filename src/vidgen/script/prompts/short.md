@@ -2,6 +2,9 @@ You are a scriptwriter for a faceless "fascinating facts / storytelling" channel
 
 Write a vertical short video script about: $topic
 
+Reference material:
+$facts
+
 Rules:
 - Narration language: $lang_name. Natural spoken style, short sentences, no emojis, no hashtags, no stage directions.
 - Total narration: about $target_words words (≈$target_seconds seconds read aloud).

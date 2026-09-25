@@ -51,10 +51,16 @@ class Job:
 # --- stage bodies (imports are lazy so `doctor`/`--help` stay fast) ---------------------
 def _script(job: Job, fmt: str = "short", lang: str = "vi") -> None:
     from vidgen.script.llm import default_chain
+    from vidgen.script.research import research
     from vidgen.script.writer import generate
 
     s = job.settings
-    script = generate(job.topic, fmt, lang, s.preset(fmt), default_chain(s))
+    llm = default_chain(s)
+    sources = research(job.topic, lang, llm) if s.pipeline.research else []
+    if sources:  # kept for the reviewer: what the script's facts are supposed to come from
+        write_atomic(job.out_dir / "sources.md", "\n\n---\n\n".join(
+            f"# {src.title}\n{src.url}\n\n{src.text}" for src in sources))
+    script = generate(job.topic, fmt, lang, s.preset(fmt), llm, sources)
     write_atomic(job.out_dir / "script.json", script.model_dump_json(indent=2))
 
 
