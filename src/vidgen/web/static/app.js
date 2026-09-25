@@ -265,8 +265,14 @@ function renderBrief(v) {
         <span class="meta">${s.lang}.wikipedia · ${s.chars} ký tự</span>
         <div class="src-preview">${esc(s.text)}${s.chars > s.text.length ? "…" : ""}</div></div>
     </label>`;
+  // sources are researched once per topic and shared by the angles; union keeps older per-angle briefs working
+  const sources = [...new Map(b.angles.flatMap((a) => a.sources).map((s) => [s.url, s])).values()];
   document.getElementById("scenes").innerHTML = `
     <div class="scenes-head"><h2 class="section-title">Chủ đề: ${esc(b.topic)}</h2></div>
+    <div class="card panel brief-sources"><h2 class="section-title">Nguồn Wikipedia — bỏ tick nguồn sai chủ đề</h2>
+      ${sources.length ? sources.map(sourceRow).join("")
+        : `<div class="sources warn">Không tìm được nguồn — kịch bản sẽ nói chung chung, hãy kiểm tra kỹ dữ kiện.</div>`}
+    </div>
     <div class="angles">${b.angles.map((a, i) => `
       <div class="card angle ${b.chosen === i ? "chosen" : ""}" data-i="${i}">
         <div class="angle-top"><span class="pill style-${a.style}">${STYLES[a.style] || a.style}</span>
@@ -274,12 +280,9 @@ function renderBrief(v) {
         <label class="field"><span>Tiêu đề</span>
           <input class="input" data-f="title" value="${esc(a.title)}" maxlength="100"></label>
         <label class="field"><span>Câu mở đầu (hook)</span>
-          <textarea class="input" data-f="hook" rows="2">${esc(a.hook)}</textarea></label>
+          <textarea class="input" data-f="hook" rows="3">${esc(a.hook)}</textarea></label>
         <label class="field"><span>Ý chính — mỗi dòng một ý</span>
-          <textarea class="input" data-f="key_points" rows="4">${esc(a.key_points.join("\n"))}</textarea></label>
-        <div class="field"><span>Nguồn Wikipedia (bỏ tick nguồn sai chủ đề)</span>
-          ${a.sources.length ? a.sources.map(sourceRow).join("")
-            : `<div class="sources warn">Không tìm được nguồn — kịch bản sẽ nói chung chung, hãy kiểm tra kỹ.</div>`}</div>
+          <textarea class="input" data-f="key_points" rows="7">${esc(a.key_points.join("\n"))}</textarea></label>
         <button class="btn primary" data-choose="${i}">Chọn góc này & viết kịch bản</button>
       </div>`).join("")}
     </div>`;
@@ -287,12 +290,6 @@ function renderBrief(v) {
 
 function wireBrief(slug, v) {
   const box = document.getElementById("scenes");
-  // the same article can back several angles: keep its checkbox in sync everywhere
-  box.addEventListener("change", (ev) => {
-    const url = ev.target.dataset.url;
-    if (!url) return;
-    box.querySelectorAll(`input[data-url="${CSS.escape(url)}"]`).forEach((c) => (c.checked = ev.target.checked));
-  });
   box.addEventListener("click", async (ev) => {
     const btn = ev.target.closest("button[data-choose]");
     if (!btn) return;

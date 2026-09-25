@@ -368,5 +368,13 @@ def create_app(settings: Callable[[], Settings] = get_settings,
     def health() -> dict:
         return {"ok": True, "time": time.time()}
 
+    @app.middleware("http")
+    async def revalidate_static(request, call_next):
+        """Static UI files: always revalidate (cheap 304 via ETag) so an updated app.js is used at once."""
+        response = await call_next(request)
+        if not request.url.path.startswith(("/api/", "/media/")):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
     return app

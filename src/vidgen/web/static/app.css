@@ -157,6 +157,7 @@ select.input { cursor: pointer; }
 .stats b { color: var(--text); font-weight: 600; }
 .dirty { color: var(--amber); font-size: 12.5px; }
 
+.brief-sources { margin-bottom: 14px; }
 .angles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
 .angle { padding: 16px; display: grid; gap: 12px; align-content: start; }
 .angle.chosen { border-color: var(--green); }
