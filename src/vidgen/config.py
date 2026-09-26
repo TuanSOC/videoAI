@@ -33,6 +33,11 @@ class LLMConfig(BaseModel):
     gemini_model: str = "gemini-2.5-flash"
 
 
+class VisionConfig(BaseModel):
+    enabled: bool = True           # score stock thumbnails with a local vision model before picking
+    model: str = "qwen2.5vl:7b"    # "qwen2.5vl:3b" is faster and lighter, less accurate
+
+
 class WhisperConfig(BaseModel):
     model: str = "small"
     device: str = "cuda"
@@ -53,6 +58,7 @@ class PipelineConfig(BaseModel):
     voices: dict[str, str]
     voice_rate: str = "+8%"  # edge-tts speaking rate; the default pace sounds slow for short videos
     llm: LLMConfig = LLMConfig()
+    vision: VisionConfig = VisionConfig()
     research: bool = True  # ground scripts in Wikipedia passages (script/research.py)
     ai: AIConfig = AIConfig()
     whisper: WhisperConfig = WhisperConfig()

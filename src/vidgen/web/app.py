@@ -147,7 +147,7 @@ def create_app(settings: Callable[[], Settings] = get_settings,
     def asset_view(a: Asset) -> dict:
         return {"scene_id": a.scene_id, "kind": a.kind, "source": a.source, "author": a.author,
                 "url": a.url, "query": a.query, "has_file": bool(a.path),
-                "alternates": len(a.alternates), "key": hashlib.sha1(f"{a.path}|{a.uid}".encode()).hexdigest()[:10]}
+                "alternates": len(a.alternates), "vision_score": a.vision_score, "key": hashlib.sha1(f"{a.path}|{a.uid}".encode()).hexdigest()[:10]}
 
     def summary(d: Path) -> dict:
         state = pipeline.load_state(d)

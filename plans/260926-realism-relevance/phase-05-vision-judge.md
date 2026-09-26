@@ -1,7 +1,7 @@
 ---
 phase: 5
 title: Vision Judge
-status: in-progress
+status: completed
 priority: P1
 effort: 4h
 dependencies:

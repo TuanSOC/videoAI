@@ -277,3 +277,6 @@ select.input { cursor: pointer; }
   .scene-row { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+.vision { color: var(--muted, #9aa4b2); }
+.vision.weak { color: #f5b041; font-weight: 600; }

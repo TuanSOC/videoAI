@@ -240,6 +240,12 @@ let briefMode = null; // slug whose angle cards are open again via "Chọn góc 
 let lengthCtx = { target: [45, 75], wps: 3.3, actual: null }; // from the API, for the length bar
 let clipCtx = { slug: "", bySceneId: new Map() }; // current clip per scene (only once visuals exist)
 
+function visionBadge(score) {
+  if (score === null || score === undefined) return "";
+  const weak = score < 5;
+  return ` · <span class="vision${weak ? " weak" : ""}" title="AI xem hình và chấm độ khớp với lời đọc (0-10)${weak ? " — nên đổi clip" : ""}">AI ${score}/10</span>`;
+}
+
 function clipHtml(s) {
   const a = clipCtx.bySceneId.get(s.id);
   if (!a) return "";
@@ -251,7 +257,7 @@ function clipHtml(s) {
   return `
     <div class="clip">${thumb}
       <div class="clip-body">
-        <div class="clip-info">${src}${a.alternates ? ` · ${a.alternates} clip dự phòng` : ""}</div>
+        <div class="clip-info">${src}${a.alternates ? ` · ${a.alternates} clip dự phòng` : ""}${visionBadge(a.vision_score)}</div>
         <div class="clip-actions">
           <input class="input sm" data-swapq="${s.id}" placeholder="từ khóa khác (tiếng Anh, tùy chọn)" maxlength="100">
           <button class="btn sm" data-swap="${s.id}">Đổi clip</button>

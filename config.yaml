@@ -27,6 +27,11 @@ llm:
   ollama_think: false   # qwen3 "thinking" is slow and not needed for JSON scripts
   gemini_model: gemini-2.5-flash
 
+# look at stock thumbnails with a local vision model before choosing a clip (ollama pull qwen2.5vl:7b)
+vision:
+  enabled: true
+  model: qwen2.5vl:7b
+
 # fetch Wikipedia passages about the topic and restrict the script's facts to them
 research: true
 

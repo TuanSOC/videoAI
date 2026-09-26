@@ -37,8 +37,8 @@ survive → implement → full suite green (162 tests baseline). Tests never cal
 | 2 | [Subtitle Chunks](./phase-02-subtitle-chunks.md) | Completed |
 | 3 | [Transitions And Look](./phase-03-transitions-and-look.md) | Completed |
 | 4 | [Queries And Thumbnails](./phase-04-queries-and-thumbnails.md) | Completed |
-| 5 | [Vision Judge](./phase-05-vision-judge.md) | In Progress |
-| 6 | [Mood Music](./phase-06-mood-music.md) | Pending |
+| 5 | [Vision Judge](./phase-05-vision-judge.md) | Completed |
+| 6 | [Mood Music](./phase-06-mood-music.md) | In Progress |
 | 7 | [Live Verification](./phase-07-live-verification.md) | Pending |
 
 Order: 1→2→3 independent, cheap, visible wins. 4 → 5 (vision needs thumbs + query set). 6 independent.

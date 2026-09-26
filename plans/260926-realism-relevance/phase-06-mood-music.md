@@ -1,9 +1,9 @@
 ---
 phase: 6
-title: "Mood Music"
-status: pending
+title: Mood Music
+status: in-progress
 priority: P2
-effort: "2h"
+effort: 2h
 dependencies: []
 ---
 
