@@ -19,6 +19,7 @@ dependencies = [
     "uvicorn>=0.30",
     "opencv-python-headless>=4.9",
     "underthesea>=9.5.0",
+    "numpy>=2.4.6",
 ]
 
 [project.scripts]

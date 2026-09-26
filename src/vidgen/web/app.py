@@ -15,7 +15,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from vidgen import pipeline
 from vidgen.config import SECRET_KEYS, Settings, get_settings, update_env_file
@@ -69,18 +69,37 @@ class SwapRequest(BaseModel):
 
 
 class RenderRequest(BaseModel):
-    force: Literal["voice", "visuals", "render", "metadata"] | None = None
+    force: str | None = None  # a pipeline stage to redo
+
+    @field_validator("force")
+    @classmethod
+    def _stage(cls, v: str | None) -> str | None:
+        if v is not None and v not in pipeline.STAGE_NAMES:
+            raise ValueError(f"force must be one of {', '.join(pipeline.STAGE_NAMES)}")
+        return v
+
+
+RETRYABLE = ("brief", "script", "render")  # job kinds whose failure leaves the video unusable
+
+
+def clip_key(a: Asset) -> str:
+    """Cache-busting key for a scene's thumbnail: changes when its clip does."""
+    return hashlib.sha1(f"{a.path}|{a.uid}".encode()).hexdigest()[:10]
 
 
 def video_status(out_dir: Path, job: JobStatus | None) -> str:
-    if job and job.status in ("queued", "running", "interrupted", "error"):
+    if job and job.status in ("queued", "running", "interrupted"):
         return job.status
+    if job and job.status == "error" and job.kind in RETRYABLE:
+        return "error"  # a failed extend/check leaves the script as it was: its banner says so
     if not (out_dir / "script.json").exists():
         if (out_dir / pipeline.BRIEF_FILE).exists():
             return "brief"  # waiting for the user to pick an angle
         return "error" if job else "empty"
     if not (out_dir / "final.mp4").exists():
         return "review"  # includes "clip swapped, needs re-render" (metadata.json may remain)
+    if pipeline.script_changed(out_dir):
+        return "stale"  # edited after the render: the video on disk no longer matches
     return "done" if (out_dir / "metadata.json").exists() else "rendered"
 
 
@@ -149,7 +168,7 @@ def create_app(settings: Callable[[], Settings] = get_settings,
     def asset_view(a: Asset) -> dict:
         return {"scene_id": a.scene_id, "kind": a.kind, "source": a.source, "author": a.author,
                 "url": a.url, "query": a.query, "has_file": bool(a.path),
-                "alternates": len(a.alternates), "vision_score": a.vision_score, "key": hashlib.sha1(f"{a.path}|{a.uid}".encode()).hexdigest()[:10]}
+                "alternates": len(a.alternates), "vision_score": a.vision_score, "key": clip_key(a)}
 
     def summary(d: Path) -> dict:
         state = pipeline.load_state(d)
@@ -377,7 +396,7 @@ def create_app(settings: Callable[[], Settings] = get_settings,
         r = root()
         queued = []
         for d in (sorted(r.iterdir()) if r.exists() else []):
-            if d.is_dir() and SLUG_RE.match(d.name) and video_status(d, job_of(d)) == "review":
+            if d.is_dir() and SLUG_RE.match(d.name) and video_status(d, job_of(d)) in ("review", "stale"):
                 try:
                     with exclusive(d.name, check_busy=False):
                         submit_render(d, None)
@@ -413,7 +432,8 @@ def create_app(settings: Callable[[], Settings] = get_settings,
         """Re-submit an interrupted job. Finished stages are skipped by the pipeline itself."""
         d = video_dir(slug)
         job = job_of(d)
-        if job is None or job.status != "interrupted":
+        retry = job is not None and job.status == "error" and job.kind in RETRYABLE
+        if job is None or not (job.status == "interrupted" or retry):
             raise HTTPException(409, "nothing to resume")
         with exclusive(slug, check_busy=False):
             if job.kind == "render":
@@ -505,7 +525,7 @@ def create_app(settings: Callable[[], Settings] = get_settings,
         src = (d / asset.path).resolve() if asset and asset.path else None
         if src is None or not src.is_relative_to(d.resolve()) or not src.exists():
             raise HTTPException(404)
-        key = hashlib.sha1(f"{asset.path}|{asset.uid}".encode()).hexdigest()[:10]
+        key = clip_key(asset)
         thumb = d / "thumbs" / f"scene_{scene_id:03d}_{key}.jpg"
         if not thumb.exists():
             thumb.parent.mkdir(exist_ok=True)

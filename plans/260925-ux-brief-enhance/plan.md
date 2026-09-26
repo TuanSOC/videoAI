@@ -64,3 +64,7 @@ Visual preview before render, parallel render queue, ComfyUI.
 
 ## Dependencies
 Related (not blocking): [260925-vidgen-pipeline-mvp](../260925-vidgen-pipeline-mvp/plan.md) — its phase 7 (E2E) should run after this plan since the create flow changes.
+
+## Later changes (reconciled 2026-09-27)
+- Research runs once per topic (not per angle); candidate articles pooled up to MAX_CANDIDATES=8.
+- The angle's hook/points reach only opening prompts; chapters/expand/rewrite get it as context.

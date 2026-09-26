@@ -63,3 +63,12 @@ Auto-upload, trend discovery, web UI, voice clone, avatars, SaaS, finance/news s
 
 ## Dependencies
 None (no other plans).
+
+## Superseded decisions (reconciled 2026-09-27 after the full code review)
+- LLM: Gemini-first → Ollama qwen3:8b only by default (Gemini optional, off).
+- Voice: per-scene TTS / voice.mp3 / timings.json / 0.15 s gap → 60-word groups (4 parallel), voice.wav +
+  timeline.json, tight cuts (LEAD 0.08 / TAIL 0.2 / GAP 0.05), +46 ms MP3 decoder delay; Piper dropped.
+- Subtitles 1-3 words → one line of 3-6 words (DP chunking, soft 26 / hard 30 chars).
+- No crossfade → 0.18 s dissolve between scenes; music 0.25 + ratio 8 → −18 dB under the voice + ratio 3.
+- Files: ai_image.py/ai_video.py → visuals/ai.py; tests/test_selector.py → test_visuals.py.
+- Phase 7 (E2E): tests/test_smoke.py now renders end to end with synthetic media; README still pending.

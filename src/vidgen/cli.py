@@ -96,13 +96,17 @@ def resume(
                                      "voice | visuals | render | metadata"),
 ) -> None:
     """Continue a video from its first missing artifact."""
-    from vidgen.pipeline import STAGE_NAMES, resolve_output_dir
+    from vidgen.pipeline import STAGE_NAMES, FolderBusyError, ensure_not_busy, resolve_output_dir
 
     if force and force not in STAGE_NAMES:
         raise typer.BadParameter(f"--force must be one of {', '.join(STAGE_NAMES)}")
     out_dir = resolve_output_dir(slug, get_settings())
     if not (out_dir / "script.json").exists():
         raise typer.BadParameter(f"no script.json in {out_dir}")
+    try:
+        ensure_not_busy(out_dir)
+    except FolderBusyError as e:
+        raise typer.BadParameter(str(e)) from e
     _run(out_dir, force)
 
 

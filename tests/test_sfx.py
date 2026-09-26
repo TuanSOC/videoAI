@@ -147,5 +147,7 @@ def test_music_gain_puts_music_18db_under_voice():
 
 
 def test_sfx_config_defaults():
-    cfg = get_settings().pipeline.sfx
+    from vidgen.config import SfxConfig
+    cfg = SfxConfig()                                        # the model's defaults, not the local yaml
     assert cfg.enabled is True and cfg.density in sfx.DENSITY
+    assert get_settings().pipeline.sfx.density in sfx.DENSITY

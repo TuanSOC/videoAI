@@ -19,4 +19,4 @@ Rules:
 - `visual_type`: "stock" by default. Use "ai_video" only for at most $max_ai_video scene(s) that cannot exist as real footage (historical recreation, imaginary scene). Use "ai_image" when stock is unlikely but motion is not essential.
 - `ai_prompt`: for ai_image/ai_video only — a photorealistic English description (subject, setting, lighting, camera). Empty string for stock.
 - `title`: catchy, under 70 characters, in $lang_name.
-- `mood`: the background music that fits, exactly one of: tense, calm, upbeat, mystery, inspiring.
+- `mood`: the background music that fits, exactly one of: $moods.

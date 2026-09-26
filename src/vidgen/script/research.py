@@ -216,7 +216,7 @@ def lookup_sources(topic: str, lang: str, queries_en: list[str], queries_local: 
 
 def research(topic: str, lang: str, llm: LLMChain, wiki: Wikipedia | None = None) -> list[Source]:
     """Plan queries with the LLM, then look them up (used when a video has no brief)."""
-    from vidgen.script.writer import LANG_NAMES
+    from vidgen.config import LANG_NAMES
 
     try:
         plan = llm.generate(PLAN_PROMPT.format(topic=topic, lang_name=LANG_NAMES[lang]), ResearchPlan)

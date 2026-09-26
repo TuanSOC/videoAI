@@ -44,3 +44,7 @@ Decisions:
 ## Dependencies
 
 <!-- Cross-plan dependencies -->
+
+## Later changes (reconciled 2026-09-27)
+- Fact-check results live in factcheck.json (not a Scene.flag field); checked per batch, one failed batch keeps the rest.
+- TTS: 60-word groups, 4 concurrent (not one request per script).

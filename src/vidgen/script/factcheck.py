@@ -4,17 +4,15 @@ Kept outside script.json on purpose: writing flags into the script would change 
 the voice to be regenerated, and keying by text means editing a flagged sentence clears its flag."""
 
 import logging
-from pathlib import Path
-from string import Template
 
 from pydantic import BaseModel
 
 from vidgen.models import Script
 from vidgen.script.llm import LLMChain
+from vidgen.script.templates import render
 from vidgen.script.research import Source, facts_block
 
 log = logging.getLogger(__name__)
-PROMPT = Path(__file__).parent / "prompts" / "factcheck.md"
 FILE = "factcheck.json"
 SCENES_PER_CHECK = 25
 
@@ -35,17 +33,16 @@ class FactCheck(BaseModel):
 
 
 def fact_check(script: Script, sources: list[Source], llm: LLMChain) -> FactCheck:
-    from vidgen.script.writer import LANG_NAMES
+    from vidgen.config import LANG_NAMES
 
     if not sources:
         return FactCheck(checked=False)
-    template = Template(PROMPT.read_text(encoding="utf-8"))
     found: list[Issue] = []
     ok, error = 0, None
     # batches: a 100-scene long video in one prompt would overflow the 8k context
     for i in range(0, len(script.scenes), SCENES_PER_CHECK):
         batch = script.scenes[i:i + SCENES_PER_CHECK]
-        prompt = template.substitute(facts=facts_block(sources), lang_name=LANG_NAMES[script.lang],
+        prompt = render("factcheck.md", facts=facts_block(sources), lang_name=LANG_NAMES[script.lang],
                                      scenes="\n".join(f"{s.id}. {s.narration}" for s in batch))
         try:  # one failed batch must not throw away what the others found
             found += llm.generate(prompt, Issues).issues

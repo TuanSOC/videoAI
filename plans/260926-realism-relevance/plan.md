@@ -57,3 +57,10 @@ New TTS engine, AI video, auto music download, long-format tuning.
 ## Dependencies
 None blocking. `260925-vidgen-pipeline-mvp` (in-progress: E2E + README) is unaffected; README should later
 mention music mood folders and the qwen2.5vl pull.
+
+## Later changes (reconciled 2026-09-27)
+- Scene.visual_queries (max 3) shipped as visual_query + alt_queries (max 2).
+- Vision: pass mark MIN_VISION=5 (prompt defines 5 as acceptable), MIN_FALLBACK=3, 2 judge calls per kind,
+  judged clips never re-sent; candidates sent as one numbered strip; keep_alive 3m, timeouts 120/45 s.
+- Subtitles: soft 26 / hard 30 chars with font shrink; cost-based phrase ends; segmenter underthesea (not pyvi).
+- WORDS_PER_SECOND vi 3.9 / en 2.5 (both measured). Config key is voice_rate (not voice.rate).

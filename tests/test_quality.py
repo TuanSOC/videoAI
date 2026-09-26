@@ -3,7 +3,6 @@ script grounding, clip-choice budget."""
 
 import shutil
 import unicodedata
-from pathlib import Path
 
 import pytest
 

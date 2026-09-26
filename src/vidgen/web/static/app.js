@@ -3,6 +3,7 @@ const view = document.getElementById("view");
 const STATUS = {
   brief: "Chọn góc", review: "Chờ duyệt", queued: "Đang chờ", running: "Đang xử lý",
   rendered: "Thiếu metadata", done: "Hoàn tất", error: "Lỗi", empty: "Trống", interrupted: "Bị gián đoạn",
+  stale: "Cần render lại",
 };
 const STEPS = [
   ["brief", "Góc & nguồn"], ["script", "Kịch bản"], ["voice", "Giọng đọc"], ["visuals", "Hình ảnh"],
@@ -237,7 +238,7 @@ function videoCard(v) {
 let draft = null;   // working copy of script being edited
 let dirty = false;
 let briefMode = null; // slug whose angle cards are open again via "Chọn góc khác"
-let lengthCtx = { target: [45, 75], wps: 3.3, actual: null }; // from the API, for the length bar
+let lengthCtx = { target: [45, 75], wps: 3.9, actual: null }; // from the API, for the length bar
 let clipCtx = { slug: "", bySceneId: new Map() }; // current clip per scene (only once visuals exist)
 
 function visionBadge(score) {
@@ -353,7 +354,9 @@ async function renderDetail(slug, { keepDraft = false } = {}) {
         <button class="btn primary sm" id="resume">Tiếp tục</button></div>` : ""}
     ${job?.status === "error" ? `<div class="banner error"><div><b>${jobLabel}.</b>
         Sửa nguyên nhân (thường là thiếu API key — xem <a href="#/settings"><u>Cài đặt</u></a>) rồi thử lại.
-        <pre>${esc(job.error)}</pre></div></div>` : ""}
+        <pre>${esc(job.error)}</pre></div>
+        ${["brief", "script", "render"].includes(job.kind) ? `<button class="btn primary sm" id="retry">Thử lại</button>` : ""}</div>` : ""}
+    ${v.status === "stale" && !active ? `<div class="banner info">Kịch bản đã sửa sau khi dựng — video hiện tại chưa khớp. Bấm <b>Render lại</b>.</div>` : ""}
     ${taskBanner}
     ${showBrief ? `<div class="banner info">Chọn một góc khai thác. Có thể sửa tiêu đề, câu mở đầu, ý chính và bỏ tick nguồn không đúng chủ đề — kịch bản chỉ dùng dữ kiện từ nguồn được tick.</div>` : ""}
     ${needsRerender && !active ? `<div class="banner info">Đã đổi clip. Bấm <b>Render video</b> để dựng lại — chỉ ghép lại video (~20-40s), giọng đọc và các clip khác giữ nguyên.</div>`
@@ -688,6 +691,11 @@ function wireDetail(slug, v) {
     renderScenes(lang, false, v.job);
   });
 
+  document.getElementById("retry")?.addEventListener("click", async (ev) => {
+    ev.target.disabled = true;
+    try { await api(`/api/videos/${slug}/resume`, { method: "POST" }); toast("Đang thử lại"); renderDetail(slug); }
+    catch (e) { toast(e.message, "error"); ev.target.disabled = false; }
+  });
   document.getElementById("resume")?.addEventListener("click", async (ev) => {
     const b = ev.currentTarget; // currentTarget is null again after the await
     b.disabled = true;
@@ -713,7 +721,8 @@ function wireDetail(slug, v) {
     ev.target.disabled = true;
     try {
       if (dirty) await saveDraft(slug);
-      await api(`/api/videos/${slug}/render`, { method: "POST", body: {} });
+      // an existing video: redo the render (the pipeline alone would see nothing missing and skip it)
+      await api(`/api/videos/${slug}/render`, { method: "POST", body: v.has_video ? { force: "render" } : {} });
       toast("Đã bắt đầu render");
       renderDetail(slug);
     } catch (e) { toast(`Không render được: ${e.message}`, "error"); ev.target.disabled = false; }

@@ -236,4 +236,5 @@ def test_short_prompt_asks_for_alt_queries():
     from vidgen.script.writer import LLMScene
 
     assert "alt_queries" in LLMScene.model_fields
-    assert "alt_queries" in (writer.PROMPTS / "short.md").read_text(encoding="utf-8")
+    from vidgen.script.templates import PROMPTS
+    assert "alt_queries" in (PROMPTS / "short.md").read_text(encoding="utf-8")

@@ -5,18 +5,16 @@ The user picks (and may edit) one angle before any script is written, so a vague
 
 import logging
 import re
-from pathlib import Path
-from string import Template
 
 from pydantic import BaseModel, Field
 
 from vidgen.models import Angle, AngleStyle, Brief
+from vidgen.script.templates import render
 from vidgen.script.llm import LLMChain
 from vidgen.script.research import Wikipedia, facts_block
 from vidgen.script.research import research as research_topic
 
 log = logging.getLogger(__name__)
-PROMPTS = Path(__file__).parent / "prompts"
 MAX_TOPICS = 5
 SINGLE_IDEA_MAX_CHARS = 120
 _BULLET = re.compile(r"^\s*(?:[-*•]+|\d+[.)])\s*")
@@ -39,10 +37,6 @@ class AngleList(BaseModel):
     angles: list[AngleDraft] = Field(min_length=1)
 
 
-def _render(name: str, **values) -> str:
-    return Template((PROMPTS / name).read_text(encoding="utf-8")).substitute(**values)
-
-
 def _clean_lines(text: str) -> list[str]:
     return [_BULLET.sub("", ln).strip() for ln in text.splitlines() if _BULLET.sub("", ln).strip()]
 
@@ -55,12 +49,12 @@ def is_single_idea(text: str) -> bool:
 def split_ideas(text: str, lang: str, llm: LLMChain) -> list[str]:
     """One short line → itself (no LLM call). Otherwise the LLM separates topics and drops notes;
     if it fails, fall back to one topic per non-empty line."""
-    from vidgen.script.writer import LANG_NAMES
+    from vidgen.config import LANG_NAMES
 
     if is_single_idea(text):
         return [text.strip()]
     try:
-        result = llm.generate(_render("split_ideas.md", text=text.strip(), max_topics=MAX_TOPICS,
+        result = llm.generate(render("split_ideas.md", text=text.strip(), max_topics=MAX_TOPICS,
                                       lang_name=LANG_NAMES[lang]), TopicList)
         topics = [t.strip() for t in result.topics if t.strip()]
     except Exception as e:
@@ -75,10 +69,10 @@ def make_brief(topic: str, lang: str, fmt: str, llm: LLMChain, wiki: Wikipedia |
 
     Order matters: angles written before research invented their key points (a "2005 Japanese
     scientist" story), and per-angle lookups cost 6 article picks and disagreed on the article."""
-    from vidgen.script.writer import LANG_NAMES
+    from vidgen.config import LANG_NAMES
 
     sources = research_topic(topic, lang, llm, wiki) if research else []
-    drafts = llm.generate(_render("brief_angles.md", topic=topic, lang_name=LANG_NAMES[lang],
+    drafts = llm.generate(render("brief_angles.md", topic=topic, lang_name=LANG_NAMES[lang],
                                   format_note=FORMAT_NOTES[fmt], facts=facts_block(sources)), AngleList).angles
     # keep one angle per style, in the canonical order, even if the model repeated a style
     by_style: dict[str, AngleDraft] = {}

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,7 +14,11 @@ Format = Literal["short", "long"]
 Lang = Literal["vi", "en"]
 
 
+LANG_NAMES = {"vi": "Vietnamese", "en": "English"}  # for prompts
+
+
 class FormatPreset(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # a typo in config.yaml is an error, not ignored
     width: int
     height: int
     fps: int
@@ -27,6 +31,7 @@ class FormatPreset(BaseModel):
 
 
 class LLMConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # a typo in config.yaml is an error, not ignored
     providers: list[Literal["ollama", "gemini"]] = ["ollama"]
     ollama_model: str = "qwen3:8b"
     ollama_think: bool = False
@@ -34,22 +39,26 @@ class LLMConfig(BaseModel):
 
 
 class VisionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # a typo in config.yaml is an error, not ignored
     enabled: bool = True           # score stock thumbnails with a local vision model before picking
     model: str = "qwen2.5vl:7b"    # "qwen2.5vl:3b" is faster and lighter, less accurate
 
 
 class SfxConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # a typo in config.yaml is an error, not ignored
     enabled: bool = True
     density: Literal["minimal", "subtle", "dense"] = "subtle"
 
 
 class WhisperConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # a typo in config.yaml is an error, not ignored
     model: str = "small"
     device: str = "cuda"
     compute_type: str = "float16"
 
 
 class AIConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # a typo in config.yaml is an error, not ignored
     image_size: dict[str, tuple[int, int]] = {"short": (768, 1344), "long": (1344, 768)}
     video_size: dict[str, tuple[int, int]] = {"short": (544, 960), "long": (960, 544)}
     video_frames: int = 81
@@ -57,6 +66,7 @@ class AIConfig(BaseModel):
 
 
 class PipelineConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # a typo in config.yaml is an error, not ignored
     output_dir: Path = Path("output")
     cache_dir: Path = Path("cache")
     formats: dict[str, FormatPreset]
@@ -96,9 +106,12 @@ SECRET_KEYS = ("GEMINI_API_KEY", "PEXELS_API_KEY", "PIXABAY_API_KEY", "COMFYUI_U
 
 
 def update_env_file(values: dict[str, str], env_file: Path = ROOT / ".env") -> None:
-    """Set KEY=value lines in .env, keeping unrelated lines and comments; then drop cached settings."""
+    """Set KEY=value lines in .env, keeping unrelated lines and comments; then drop cached settings.
+    A value with a line break is refused: it would write extra KEY=value lines."""
     lines = env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []
     pending = {k: v.strip() for k, v in values.items() if k in SECRET_KEYS}
+    if any(ch in v for v in pending.values() for ch in "\r\n"):
+        raise ValueError("a setting value cannot contain a line break")
     out = []
     for line in lines:
         key = line.split("=", 1)[0].strip()

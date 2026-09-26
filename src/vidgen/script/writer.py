@@ -1,23 +1,19 @@
 """Topic → validated Script. Short: one LLM call. Long: outline, then one call per chapter."""
 
-import json
 import logging
 import re
 from itertools import groupby
-from pathlib import Path
-from string import Template
 
 from pydantic import BaseModel, Field
 
 from vidgen.assemble.music import MOODS
-from vidgen.config import Format, FormatPreset, Lang
+from vidgen.config import LANG_NAMES, Format, FormatPreset, Lang
 from vidgen.models import Angle, Scene, Script, SourceRef, VisualType
+from vidgen.script.templates import render
 from vidgen.script.llm import LLMChain, LLMError
 from vidgen.script.research import Source, facts_block
 
 log = logging.getLogger(__name__)
-PROMPTS = Path(__file__).parent / "prompts"
-LANG_NAMES = {"vi": "Vietnamese", "en": "English"}
 # Spoken rate of edge-tts neural voices; Vietnamese counts space-separated syllables.
 # spoken pace incl. pauses at voice_rate +8% with tight scene cuts, measured on shorts:
 # vi 3.98 w/s (was 3.23 before the pacing changes), en 2.53 w/s (AndrewMultilingual)
@@ -60,10 +56,6 @@ class Outline(BaseModel):
 
 class ChapterDraft(BaseModel):
     scenes: list[LLMScene] = Field(min_length=1)  # postprocess splits a long one; 2 made valid drafts fail
-
-
-def _render(name: str, **values) -> str:
-    return Template((PROMPTS / name).read_text(encoding="utf-8")).substitute(**values)
 
 
 def target_seconds(preset: FormatPreset) -> int:
@@ -148,7 +140,7 @@ def expand_scenes(scenes: list[LLMScene], target_words: int, ctx: dict, lang: st
     listing = "\n".join(f"{k}. {s.narration}" for k, s in enumerate(scenes, 1))
     new_count = max(1, round((target_words - current) / WORDS_PER_NEW_SCENE))
     try:
-        added = llm.generate(_render("expand.md", scenes=listing, current_words=current,
+        added = llm.generate(render("expand.md", scenes=listing, current_words=current,
                                      target_words=target_words, new_scenes=new_count, count=len(scenes),
                                      placement=placement,
                                      lang_name=LANG_NAMES[lang], **ctx), ExpandedScenes).new_scenes
@@ -193,7 +185,7 @@ def rewrite_one(script: Script, scene: Scene, prev: str, nxt: str, instruction: 
     current_words = len(scene.narration.split())
     wants_shorter = any(h in instr.lower() for h in SHORTER_HINTS)
     limit = min(MAX_SCENE_WORDS, current_words - 1) if wants_shorter and current_words > 3 else MAX_SCENE_WORDS
-    prompt = _render(
+    prompt = render(
         "rewrite_scene.md", title=script.title, lang_name=LANG_NAMES[script.lang],
         angle=angle_block(angle, opening=scene.id == script.scenes[0].id),
         facts=facts_block(sources), prev=prev or "(none — this is the opening)", current=scene.narration,
@@ -262,7 +254,7 @@ def extend_script(script: Script, preset: FormatPreset, llm: LLMChain, sources: 
 
 
 def _generate_short(topic, lang, preset, llm, seconds, words, ctx, body):
-    prompt = _render(
+    prompt = render(
         "short.md", topic=topic, **ctx, lang_name=LANG_NAMES[lang], target_words=words,
         target_seconds=seconds, scene_range="8-14", max_ai_video=preset.max_ai_video,
     )
@@ -273,7 +265,7 @@ def _generate_short(topic, lang, preset, llm, seconds, words, ctx, body):
 def _generate_long(topic, lang, preset, llm, seconds, words, ctx, body):
     n_chapters = max(3, round(seconds / SECONDS_PER_CHAPTER))
     outline = llm.generate(
-        _render("long_outline.md", topic=topic, **ctx, lang_name=LANG_NAMES[lang],
+        render("long_outline.md", topic=topic, **ctx, lang_name=LANG_NAMES[lang],
                 target_minutes=round(seconds / 60), chapter_count=n_chapters),
         Outline,
     )
@@ -291,7 +283,7 @@ def _generate_long(topic, lang, preset, llm, seconds, words, ctx, body):
         try:  # one chapter the model can't write must not lose the outline and every other chapter
             draft = _generate_with_length(
                 llm,
-                _render("long_chapter.md", title=outline.title, **body, outline=outline_text, chapter_index=i,
+                render("long_chapter.md", title=outline.title, **body, outline=outline_text, chapter_index=i,
                         chapter_count=len(outline.chapters), chapter_title=ch.title,
                         chapter_summary=ch.summary, position_note=note, lang_name=LANG_NAMES[lang],
                         # spread the AI-video budget: one slot per chapter for the first N chapters

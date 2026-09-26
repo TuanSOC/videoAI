@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import shutil
+import threading
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -551,20 +552,35 @@ def vision_judge(s: Settings):
     return VisionJudge(s.secrets.ollama_url, s.pipeline.vision.model, unload_first=s.pipeline.llm.ollama_model)
 
 
+_VISION_LOCK = threading.Lock()
+_vision_users = 0      # sessions (a video's sourcing, a swap) currently able to call the vision model
+_vision_loaded = False  # one of them has loaded it
+
+
 def vision_session(selector: Selector, s: Settings):
-    """Context: after sourcing, free the vision model's VRAM — only if it was actually used (a swap
-    that takes a saved alternate never loads it, and must not unload it under another job)."""
+    """Context: free the vision model's VRAM when the LAST session using it ends — a swap finishing
+    must not unload the model under another video's sourcing (it reloaded half on the CPU)."""
     from contextlib import contextmanager
 
-    from vidgen.visuals.vision import unload
+    from vidgen.visuals import vision
 
     @contextmanager
     def session():
+        global _vision_users, _vision_loaded
+        if selector.vision is None:
+            yield
+            return
+        with _VISION_LOCK:
+            _vision_users += 1
         try:
             yield
         finally:
-            if selector.vision is not None and selector.vision.used:
-                unload(s.secrets.ollama_url, s.pipeline.vision.model)
+            with _VISION_LOCK:
+                _vision_users -= 1
+                _vision_loaded |= selector.vision.used
+                if _vision_users == 0 and _vision_loaded:
+                    vision.unload(s.secrets.ollama_url, s.pipeline.vision.model)
+                    _vision_loaded = False
 
     return session()
 

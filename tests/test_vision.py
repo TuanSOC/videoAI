@@ -1,5 +1,4 @@
 import base64
-import dataclasses
 import json
 
 import cv2
@@ -262,7 +261,8 @@ def test_vision_session_unloads_only_if_used(monkeypatch, tmp_path):
 
 
 def test_text_judge_kept_as_backup_when_vision_enabled(monkeypatch, tmp_path):
-    s = get_settings()
+    s = get_settings().model_copy(deep=True)
+    s.pipeline.vision.enabled = True                         # independent of the local config.yaml
     monkeypatch.setattr(sel, "llm_judge", lambda st: "text-judge")
     monkeypatch.setattr(sel, "stock_clients", lambda st: [])
     from vidgen.models import Script

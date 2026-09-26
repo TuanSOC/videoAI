@@ -2,6 +2,7 @@ import pytest
 
 from vidgen import text as textlib
 
+from vidgen.assemble import clips
 from vidgen.assemble import subtitles as subs
 from vidgen.assemble.clips import Shot, frame_counts, plan_shots, shot_args
 from vidgen.assemble.focus import Focus
@@ -118,7 +119,7 @@ def test_shot_args_short_dissolve_grade_and_grain(tmp_path):
     from pathlib import Path
 
     p = get_settings().preset("short")
-    tf = round(0.18 * p.fps)
+    tf = round(clips.TRANSITION * p.fps)
     a = Shot(1, 0, "video", Path("a.mp4"), 1.0, 90, "none", focus=Focus(0.3, 0.05))
     b = Shot(2, 0, "image", Path("b.jpg"), 0.0, 90, "pan_l", transition_in=True)
     args = shot_args(a, b, p, tmp_path / "o.mp4")

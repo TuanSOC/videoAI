@@ -327,7 +327,8 @@ def test_length_fields_and_actual_only_while_script_unchanged(env):
     slug = create(client, jobs)
     d = s.pipeline.output_dir / slug
     v = client.get(f"/api/videos/{slug}").json()
-    assert v["target_seconds"] == [45, 75] and v["wps"] == WORDS_PER_SECOND["vi"] and v["actual_seconds"] is None
+    expected = list(s.preset("short").target_seconds)             # whatever config.yaml says
+    assert v["target_seconds"] == expected and v["wps"] == WORDS_PER_SECOND["vi"] and v["actual_seconds"] is None
 
     from vidgen import pipeline
     from vidgen.models import SceneAudio, Timeline
@@ -457,7 +458,7 @@ def test_choose_with_then_render_goes_straight_to_video(env):
 def test_render_all_queues_only_ready_videos(env):
     client, jobs, calls, s = env
     ready1, ready2 = create(client, jobs), create(client, jobs)
-    r = client.post("/api/videos", json={"topic": "chưa chọn góc"})
+    client.post("/api/videos", json={"topic": "chưa chọn góc"})
     jobs.wait_idle()
     out = client.post("/api/render-all").json()
     jobs.wait_idle()
@@ -522,3 +523,46 @@ def test_one_broken_folder_does_not_hide_the_library(env):
     videos = {v["slug"]: v for v in client.get("/api/videos").json()}
     assert videos[good]["status"] == "review"
     assert videos[bad]["status"] == "error" and videos[bad]["error"]
+
+
+def test_failed_brief_can_be_retried(env):
+    _, _, _, s = env
+    state = {"down": True}
+
+    def brief(d, st):
+        if state["down"]:
+            raise RuntimeError("Ollama down")
+        fake_brief(d, st)
+    jobs = JobQueue()
+    client = TestClient(create_app(settings=lambda: s, brief_runner=brief, jobs=jobs))
+    slug = client.post("/api/videos", json={"topic": "Bí ẩn tam giác Bermuda"}).json()["slug"]
+    jobs.wait_idle()
+    assert client.get(f"/api/videos/{slug}").json()["status"] == "error"
+    state["down"] = False
+    assert client.post(f"/api/videos/{slug}/resume").status_code == 200
+    jobs.wait_idle()
+    assert client.get(f"/api/videos/{slug}").json()["status"] == "brief"
+
+
+def test_edited_after_render_is_stale_and_render_all_picks_it(env):
+    client, jobs, calls, s = env
+    slug = create(client, jobs, auto_render=True)
+    from vidgen import pipeline
+    d = s.pipeline.output_dir / slug                      # what a real run records after rendering
+    state = pipeline.load_state(d)
+    state["script_hash"] = pipeline._hash(d / "script.json")
+    pipeline._save_state(d, state)
+    body = client.get(f"/api/videos/{slug}").json()["script"]
+    body["scenes"][0]["narration"] = "Một câu hoàn toàn mới."
+    assert client.put(f"/api/videos/{slug}/script", json=body).status_code == 200
+    assert client.get(f"/api/videos/{slug}").json()["status"] == "stale"
+    assert client.post("/api/render-all").json()["queued"] == [slug]
+
+
+def test_failed_extend_does_not_mark_the_video_broken(env):
+    client, jobs, _, s = env
+    slug = create(client, jobs)
+    from vidgen.web.jobs import JobStatus
+    job = JobStatus(slug=slug, kind="extend", status="error", error="đã đủ dài", out_dir=s.pipeline.output_dir / slug)
+    job.save()
+    assert client.get(f"/api/videos/{slug}").json()["status"] == "review"

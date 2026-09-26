@@ -67,7 +67,7 @@ def test_force_redoes_stage_and_after(tmp_path, fake_stages):
     pipeline.run_stages(tmp_path, get_settings())
     fake_stages.clear()
     pipeline.run_stages(tmp_path, get_settings(), force="render")
-    assert fake_stages == ["render", "metadata"]
+    assert fake_stages == ["render"]            # metadata is kept: the render refreshes its credits
 
 
 def test_invalidate_removes_owned_dirs(tmp_path):

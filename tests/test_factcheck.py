@@ -90,7 +90,6 @@ def test_rewrite_keeps_english_visual_query():
 
 
 def test_fact_check_batches_long_scripts():
-    from vidgen.script import factcheck
     long_script = Script(title="t", hook="h", lang="vi", format="long",
                          scenes=[Scene(id=i, narration=f"Câu {i}.", visual_query="q") for i in range(1, 61)])
     llm = Fake({"issues": []})

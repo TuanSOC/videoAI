@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from vidgen.fsutil import write_atomic
 from vidgen.models import Asset, Script
 from vidgen.script.llm import LLMChain
-from vidgen.script.writer import LANG_NAMES
+from vidgen.config import LANG_NAMES
 
 DISCLOSURE = {
     "vi": "Video sử dụng giọng đọc AI; một số hình ảnh minh họa được tạo bằng AI.",

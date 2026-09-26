@@ -3,7 +3,7 @@ title: 'Studio-grade retention: SFX, open loop, document highlighter'
 description: >-
   Automatic sound design (synth whoosh/impact/pop), open-loop short scripts with
   a 3 s hook, document-highlight motion scenes
-status: pending
+status: in-progress
 priority: P2
 branch: main
 tags:
@@ -43,3 +43,7 @@ UI controls for SFX, AI music/SFX generation, downloading SFX packs, real-public
 ## Dependencies
 None blocking. Touches `assemble/render.py` (two separate filter graphs from the NaN fix must stay) and
 `assemble/clips.py` (plan_shots cut times).
+
+## Review fixes (2026-09-27)
+Phase 1 revised after the full review: synth sounds normalised to −3 dBFS peak (pops were −23), cues are
+PEAK times (whoosh mid-dissolve), graph via file (hundreds of cues), unreadable user files skipped.

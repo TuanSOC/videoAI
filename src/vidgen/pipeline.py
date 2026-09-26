@@ -130,6 +130,9 @@ STAGES = [
     Stage("metadata", "metadata.json", (), _metadata),
 ]
 STAGE_NAMES = [st.name for st in STAGES]
+# a stage that ran makes these stale (the video is cut from the voice and the clips); metadata is
+# refreshed by the render itself
+BUILT_ON = {"voice": {"render"}, "visuals": {"render"}}
 
 
 # --- state -------------------------------------------------------------------------------
@@ -146,22 +149,22 @@ def _save_state(out_dir: Path, state: dict) -> None:
     write_atomic(out_dir / "state.json", json.dumps(state, indent=2, ensure_ascii=False))
 
 
+def _remove_outputs(out_dir: Path, st: "Stage") -> bool:
+    removed = False
+    for name in (st.artifact, *st.extra):
+        p = out_dir / name
+        if p.is_dir():
+            shutil.rmtree(p)
+            removed = True
+        elif p.exists():
+            p.unlink()
+            removed = True
+    return removed
+
+
 def invalidate_from(out_dir: Path, stage: str) -> list[str]:
     """Delete artifacts of `stage` and every later stage. Returns names of stages cleared."""
-    cleared = []
-    for st in STAGES[STAGE_NAMES.index(stage):]:
-        removed = False
-        for name in (st.artifact, *st.extra):
-            p = out_dir / name
-            if p.is_dir():
-                shutil.rmtree(p)
-                removed = True
-            elif p.exists():
-                p.unlink()
-                removed = True
-        if removed:
-            cleared.append(st.name)
-    return cleared
+    return [st.name for st in STAGES[STAGE_NAMES.index(stage):] if _remove_outputs(out_dir, st)]
 
 
 # --- public API ----------------------------------------------------------------------------
@@ -361,13 +364,36 @@ def load_state(out_dir: Path) -> dict:
 
 def invalidate_stage(out_dir: Path, stage: str) -> None:
     """Remove ONE stage's outputs (unlike invalidate_from, later stages such as metadata survive)."""
-    st = STAGES[STAGE_NAMES.index(stage)]
-    for name in (st.artifact, *st.extra):
-        p = out_dir / name
-        if p.is_dir():
-            shutil.rmtree(p)
-        elif p.exists():
-            p.unlink()
+    _remove_outputs(out_dir, STAGES[STAGE_NAMES.index(stage)])
+
+
+class FolderBusyError(RuntimeError):
+    pass
+
+
+def ensure_not_busy(out_dir: Path) -> None:
+    """The web studio records its running job in job.json: don't run a second pipeline on the folder."""
+    job = out_dir / "job.json"
+    if not job.exists():
+        return
+    try:
+        status = json.loads(job.read_text(encoding="utf-8")).get("status")
+    except ValueError:
+        return
+    if status in ("queued", "running"):
+        raise FolderBusyError(f"{out_dir.name} has a {status} job in the web studio — wait for it or "
+                              "restart `vidgen ui` (which marks a dead job interrupted)")
+
+
+def script_changed(out_dir: Path) -> bool:
+    """script.json was edited after the last run (the video on disk no longer matches it)."""
+    recorded = _load_state(out_dir).get("script_hash")
+    return bool(recorded) and recorded != _hash(out_dir / "script.json")
+
+
+def voice_key(s: Settings, lang: str) -> str:
+    """What the voice was made with: changing the voice or its rate means voicing again."""
+    return f"{s.pipeline.voices.get(lang, '')}|{s.pipeline.voice_rate}"
 
 
 def swap_clip(out_dir: Path, s: Settings, scene_id: int, query: str | None = None) -> Asset:
@@ -419,13 +445,23 @@ def run_stages(out_dir: Path, s: Settings, force: str | None = None,
         log.info("script.json edited → regenerating %s", ", ".join(cleared) or "nothing")
         on_stage("script", "edited → downstream reset")
     state["script_hash"] = current_hash
+    job = Job(out_dir, s, state.get("topic", ""))
+    voice = voice_key(s, job.read_script().lang)
+    if state.get("voice_key", voice) != voice:
+        invalidate_stage(out_dir, "voice")
+        on_stage("voice", "voice settings changed → re-voicing")
+    state["voice_key"] = voice
     _save_state(out_dir, state)  # also when every stage is skipped (old folders had no hash)
     if force:
-        invalidate_from(out_dir, force)
+        # one stage; the ones built on it follow below. Metadata survives a re-render (_render
+        # refreshes its credits) — no LLM call for "Render lại".
+        invalidate_stage(out_dir, force)
 
-    job = Job(out_dir, s, state.get("topic", ""))
     timings: dict[str, float] = {}
+    redo: set[str] = set()
     for st in STAGES:
+        if st.name in redo:
+            invalidate_stage(out_dir, st.name)
         if (out_dir / st.artifact).exists():
             on_stage(st.name, "skip")
             continue
@@ -437,6 +473,7 @@ def run_stages(out_dir: Path, s: Settings, force: str | None = None,
             timings[st.name] = round(time.time() - t, 1)
             state.setdefault("timings", {}).update(timings)
             _save_state(out_dir, state)
+        redo |= BUILT_ON.get(st.name, set())
         on_stage(st.name, f"done {timings[st.name]}s")
     return timings
 
