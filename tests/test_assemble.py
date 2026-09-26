@@ -151,8 +151,9 @@ def test_final_args(music):
 
     args = final_args(12.3456, Path(music) if music else None)
     assert args[-1] == "final.mp4" and "12.346" in args
-    graph = args[args.index("-filter_complex") + 1]
-    assert ("sidechaincompress" in graph) == bool(music)
+    graphs = [args[i + 1] for i, a in enumerate(args) if a == "-filter_complex"]
+    assert len(graphs) == 2 and "ass=" in graphs[0] and "[0:v]" not in graphs[1]  # video/audio kept apart
+    assert ("sidechaincompress" in graphs[1]) == bool(music)
     assert audio_filter(False).count("[a]") == 1
 
 

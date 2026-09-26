@@ -35,8 +35,10 @@ def final_args(duration: float, music: Path | None) -> list[str]:
     inputs = ["-f", "concat", "-safe", "0", "-i", "segments/list.txt", "-i", "voice.wav"]
     if music:
         inputs += ["-stream_loop", "-1", "-i", str(music)]
-    graph = f"[0:v]ass=subs.ass:fontsdir=fonts[v];{audio_filter(music is not None)}"
-    return [*inputs, "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
+    # two independent graphs: with video and audio in one graph FFmpeg 8.1's loudnorm can emit NaN
+    # samples for some voices ("Input contains NaN" from the AAC encoder, render fails)
+    return [*inputs, "-filter_complex", "[0:v]ass=subs.ass:fontsdir=fonts[v]",
+            "-filter_complex", audio_filter(music is not None), "-map", "[v]", "-map", "[a]",
             *ffmpeg.video_encoder(), "-c:a", "aac", "-b:a", "192k",
             "-t", f"{duration:.3f}", "-movflags", "+faststart", "final.mp4"]
 
