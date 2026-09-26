@@ -11,4 +11,4 @@ assets/music/**/*.wav
 assets/music/**/*.ogg
 assets/music/**/*.flac
 .codegraph/
-assets/sfx/**/synth_*.wav
+assets/sfx/**/synth*.wav
