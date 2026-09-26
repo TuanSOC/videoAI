@@ -4,7 +4,7 @@ sorted into mood folders (assets/music/tense/, calm/, ...). The script model tag
 import random
 from pathlib import Path
 
-AUDIO_EXTS = {".mp3", ".m4a", ".wav", ".ogg"}
+AUDIO_EXTS = {".mp3", ".m4a", ".wav", ".ogg", ".flac"}  # also the SFX library's
 MOODS = ("tense", "calm", "upbeat", "mystery", "inspiring")
 
 

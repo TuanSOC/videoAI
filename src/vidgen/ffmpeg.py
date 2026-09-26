@@ -1,5 +1,7 @@
 """Thin wrappers around ffmpeg/ffprobe subprocesses."""
 
+import math
+import shutil
 import subprocess
 from functools import lru_cache
 from pathlib import Path
@@ -15,7 +17,10 @@ def run(args: list[str], cwd: Path | None = None, timeout: float | None = None) 
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=timeout)
     except FileNotFoundError as e:
-        raise FFmpegError("ffmpeg not found on PATH — install FFmpeg") from e
+        if shutil.which("ffmpeg") is None:
+            raise FFmpegError("ffmpeg not found on PATH — install FFmpeg") from e
+        # Windows reports an over-long command line (WinError 206) as "file not found"
+        raise FFmpegError(f"could not start ffmpeg ({e}); command line length {len(' '.join(cmd))}") from e
     except subprocess.TimeoutExpired as e:
         raise FFmpegError(f"ffmpeg timed out after {timeout:.0f}s: {' '.join(cmd)}") from e
     if proc.returncode != 0:
@@ -32,18 +37,25 @@ def video_encoder() -> tuple[str, ...]:
         return ("-c:v", "libx264", "-preset", "veryfast", "-crf", "20")
 
 
-def mean_volume(path: Path) -> float | None:
-    """Mean level in dBFS (ffmpeg volumedetect), or None if it can't be measured."""
+def volume_stats(path: Path) -> tuple[float | None, float | None]:
+    """(mean, max) level in dBFS from ffmpeg volumedetect; None for what can't be measured or is silence."""
     proc = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-af", "volumedetect",
                            "-vn", "-f", "null", "-"],
                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+    found: dict[str, float | None] = {"mean_volume": None, "max_volume": None}
     for line in proc.stderr.splitlines():
-        if "mean_volume:" in line:
-            try:
-                return float(line.split("mean_volume:")[1].split("dB")[0])
-            except ValueError:
-                return None
-    return None
+        for key in found:
+            if f"{key}:" in line:
+                try:
+                    value = float(line.split(f"{key}:")[1].split("dB")[0])
+                except ValueError:
+                    continue
+                found[key] = value if math.isfinite(value) else None
+    return found["mean_volume"], found["max_volume"]
+
+
+def mean_volume(path: Path) -> float | None:
+    return volume_stats(path)[0]
 
 
 def duration(path: Path) -> float:

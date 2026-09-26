@@ -7,25 +7,24 @@ unit, don't strand one word before a full stop. Positions keep clear of TikTok/S
 """
 
 import logging
-import re
 import warnings
 from collections import Counter
 
 from vidgen.config import FormatPreset
 from vidgen.models import Script, Timeline, WordTiming
+from vidgen.text import CLAUSE_END, SENTENCE_END, align, bare, ends_with, is_number
 
 log = logging.getLogger(__name__)
 FONT = "Be Vietnam Pro"
 # ASS colours are &HAABBGGRR
-WHITE, YELLOW, CYAN, BLACK = "&H00FFFFFF", "&H0000E5FF", "&H00F5D65C", "&H00000000"
+WHITE, YELLOW, BLACK = "&H00FFFFFF", "&H0000E5FF", "&H00000000"
 HIGHLIGHT = r"{\c&H0000E5FF&}"  # long-format emphasis colour (yellow)
-SENTENCE_PUNCT = (".", "!", "?", "…", ",", ";", ":")
+SENTENCE_PUNCT = CLAUSE_END
 SHORT_MAX_WORDS = 6
 SHORT_MIN_WORDS = 3
 SHORT_IDEAL_WORDS = 4
 SHORT_MAX_CHARS = 26   # one line at the style's font size
 SHORT_HARD_CHARS = 30  # allowed (with a cost) when long words leave no better split; drawn smaller
-SENTENCE_END = (".", "!", "?", "…")
 LONG_MAX_WORDS = 12
 LONG_LINE_CHARS = 42
 PAUSE_BREAK = 0.3   # a gap this long between words starts a new chunk
@@ -64,25 +63,20 @@ def _escape(text: str) -> str:
     return text.replace("\\", "/").replace("{", "(").replace("}", ")")
 
 
-def _bare(token: str) -> str:
-    return "".join(ch for ch in token.casefold() if ch.isalnum())
-
-
-def _is_number(token: str) -> bool:
-    return any(ch.isdigit() for ch in token)
-
-
 def display_words(script: Script, timeline: Timeline) -> list[WordTiming]:
-    """TTS word events drop punctuation; restore it from the narration when tokens line up 1:1."""
+    """TTS word events drop punctuation (and may merge "năm 2013," into one event): restore the text as
+    written by pairing tokens with events (text.align). A scene that can't be paired keeps the events."""
     narration = {s.id: s.narration.split() for s in script.scenes}
     out: list[WordTiming] = []
     for sa in timeline.scenes:
         tokens = narration.get(sa.scene_id, [])
-        # equal counts alone can be a coincidence ("—" token vs merged number) → compare text too
-        if len(tokens) == len(sa.words) and all(_bare(t) == _bare(w.word) for t, w in zip(tokens, sa.words)):
-            out += [w.model_copy(update={"word": t}) for w, t in zip(sa.words, tokens)]
-        else:
+        groups = align(tokens, [w.word for w in sa.words]) if tokens and sa.words else None
+        if groups is None:
             out += sa.words
+            continue
+        for token_ids, word_ids in groups:
+            first, last = sa.words[word_ids[0]], sa.words[word_ids[-1]]
+            out.append(WordTiming(word=" ".join(tokens[t] for t in token_ids), start=first.start, end=last.end))
     return out
 
 
@@ -94,17 +88,17 @@ def emphasis_words(script: Script) -> set[str]:
     for scene in script.scenes:
         tokens = scene.narration.split()
         for i, tok in enumerate(tokens):
-            b = _bare(tok)
+            b = bare(tok)
             if not b:
                 continue
-            if _is_number(tok):
+            if is_number(tok):
                 marked.add(b)
-            elif i > 0 and tok[:1].isupper() and not tokens[i - 1].endswith((".", "!", "?")):
+            elif i > 0 and tok[:1].isupper() and not ends_with(tokens[i - 1]):
                 marked.add(b)  # a name, not a sentence start
-            if b not in FUNCTION_WORDS and len(b) > 1 and not _is_number(tok):
+            if b not in FUNCTION_WORDS and len(b) > 1 and not is_number(tok):
                 counts[b] += 1
     # topic words: recurring AND in the title ("bạch", "tuộc"), not just frequent ("nơi", "sống")
-    title = {_bare(t) for t in script.title.split()}
+    title = {bare(t) for t in script.title.split()}
     topic = [w for w, n in counts.most_common() if n >= 3 and w in title][:MAX_TOPIC_WORDS]
     return marked | set(topic)
 
@@ -114,7 +108,7 @@ def _closes_within(words: list[WordTiming], i: int, lookahead: int) -> bool:
     for j in range(i + 1, min(i + 1 + lookahead, len(words))):
         if words[j].start - words[j - 1].end > PAUSE_BREAK:
             return False
-        if words[j].word.endswith(SENTENCE_PUNCT):
+        if ends_with(words[j].word, SENTENCE_PUNCT):
             return True
     return False
 
@@ -123,7 +117,7 @@ def _keeps_going(w: WordTiming, nxt: WordTiming | None) -> bool:
     """A chunk shouldn't end here: on a function word, or between a number and its unit."""
     if nxt is None or nxt.start - w.end > PAUSE_BREAK:
         return False
-    return _bare(w.word) in FUNCTION_WORDS or _is_number(w.word)
+    return bare(w.word) in FUNCTION_WORDS or is_number(w.word)
 
 
 def chunk_words(words: list[WordTiming], max_words: int, orphan_lookahead: int = 0,
@@ -139,15 +133,10 @@ def chunk_words(words: list[WordTiming], max_words: int, orphan_lookahead: int =
         pause = nxt is not None and nxt.start - w.end > PAUSE_BREAK
         over = len(current) >= max_words
         hold = (_keeps_going(w, nxt) and len(current) < max_words + stretch) or _closes_within(words, i, orphan_lookahead)
-        if (over and not hold) or w.word.endswith(SENTENCE_PUNCT) or pause or nxt is None:
+        if (over and not hold) or ends_with(w.word, SENTENCE_PUNCT) or pause or nxt is None:
             chunks.append(current)
             current = []
     return chunks
-
-
-def _ends(word: str, punct: tuple[str, ...]) -> bool:
-    """Punctuation at the end of a word, looking past closing quotes/brackets ("không?'")."""
-    return word.rstrip("'\"”’»)]").endswith(punct)
 
 
 def _segments(words: list[WordTiming]) -> list[list[WordTiming]]:
@@ -157,7 +146,7 @@ def _segments(words: list[WordTiming]) -> list[list[WordTiming]]:
     for i, w in enumerate(words):
         current.append(w)
         nxt = words[i + 1] if i + 1 < len(words) else None
-        if nxt is None or _ends(w.word, SENTENCE_END) or nxt.start - w.end > PAUSE_BREAK:
+        if nxt is None or ends_with(w.word, SENTENCE_END) or nxt.start - w.end > PAUSE_BREAK:
             out.append(current)
             current = []
     return out
@@ -173,9 +162,9 @@ def _chunk_cost(chunk: list[WordTiming], closes_segment: bool) -> float:
         cost += 6 if n == 2 else 16
     last = chunk[-1].word
     if not closes_segment:
-        if _bare(last) in FUNCTION_WORDS or _is_number(last):
+        if bare(last) in FUNCTION_WORDS or is_number(last):
             cost += 14  # "để" / "and" / "3" at a line end: the viewer waits for the rest
-        if _ends(last, SENTENCE_PUNCT):
+        if ends_with(last, SENTENCE_PUNCT):
             cost -= 2  # a comma is a natural place to break
     return cost
 
@@ -190,8 +179,8 @@ def compound_pairs(script: Script) -> set[tuple[str, str]]:
     for scene in script.scenes:
         tokens = scene.narration.split()
         for a, b in zip(tokens, tokens[1:]):
-            if not a.endswith(SENTENCE_PUNCT) and _bare(a) not in FUNCTION_WORDS and _bare(b) not in FUNCTION_WORDS:
-                pairs[(_bare(a), _bare(b))] += 1
+            if not ends_with(a, SENTENCE_PUNCT) and bare(a) not in FUNCTION_WORDS and bare(b) not in FUNCTION_WORDS:
+                pairs[(bare(a), bare(b))] += 1
     glue = {p for p, n in pairs.items() if n >= 2}
     tokenize = _vi_tokenizer()
     for scene in script.scenes if tokenize else ():
@@ -201,7 +190,7 @@ def compound_pairs(script: Script) -> set[tuple[str, str]]:
             log.warning("Vietnamese word segmentation failed: %s", e)
             break
         for word in segmented.split():
-            syllables = [_bare(s) for s in word.split("_")]
+            syllables = [bare(s) for s in word.split("_")]
             glue |= set(zip(syllables, syllables[1:]))
     return glue
 
@@ -226,7 +215,7 @@ def short_chunks(words: list[WordTiming], glue: set[tuple[str, str]] = frozenset
         n = len(seg)
         best: list[tuple[float, int]] = [(0.0, 0)] + [(float("inf"), 0)] * n  # (cost, previous cut)
         for end in range(1, n + 1):
-            split_word = end < n and (_bare(seg[end - 1].word), _bare(seg[end].word)) in glue
+            split_word = end < n and (bare(seg[end - 1].word), bare(seg[end].word)) in glue
             for start in range(max(0, end - SHORT_MAX_WORDS), end):
                 c = best[start][0] + _chunk_cost(seg[start:end], end == n) + (8 if split_word else 0)
                 if c < best[end][0]:
@@ -245,14 +234,20 @@ def short_chunks(words: list[WordTiming], glue: set[tuple[str, str]] = frozenset
     return chunks
 
 
-def two_lines(tokens: list[str], max_chars: int = LONG_LINE_CHARS) -> str:
-    """Split at the word boundary that best balances the two lines by character length."""
-    if len(" ".join(tokens)) <= max_chars or len(tokens) < 2:
-        return " ".join(tokens)
+def _line_break(tokens: list[str], max_chars: int = LONG_LINE_CHARS) -> int | None:
+    """Index of the first token of line 2 (the most balanced split by characters), or None: one line."""
     total = len(" ".join(tokens))
-    best = min(range(1, len(tokens)),
-               key=lambda k: abs(len(" ".join(tokens[:k])) * 2 - total))
-    return " ".join(tokens[:best]) + r"\N" + " ".join(tokens[best:])
+    if total <= max_chars or len(tokens) < 2:
+        return None
+    return min(range(1, len(tokens)), key=lambda k: abs(len(" ".join(tokens[:k])) * 2 - total))
+
+
+def two_lines(tokens: list[str], max_chars: int = LONG_LINE_CHARS, shown: list[str] | None = None) -> str:
+    """Split at the word boundary that best balances the two lines by character length. `shown`: the
+    same tokens with ASS tags added (tags must not count as characters)."""
+    shown = shown or tokens
+    k = _line_break(tokens, max_chars)
+    return " ".join(shown) if k is None else " ".join(shown[:k]) + r"\N" + " ".join(shown[k:])
 
 
 def _chunk_end(chunk: list[WordTiming], next_chunk: list[WordTiming] | None) -> float:
@@ -282,13 +277,9 @@ def _events_long(chunks: list[list[WordTiming]], emphasis: set[str]) -> list[tup
     events = []
     for ci, chunk in enumerate(chunks):
         tokens = [_escape(w.word) for w in chunk]
-        text = two_lines(tokens)
-        for w in chunk:  # colour key words after line-splitting (tags don't count as characters)
-            if _bare(w.word) in emphasis:
-                esc = _escape(w.word)
-                marked = f"{HIGHLIGHT}{esc}" + r"{\r}"
-                # a function, not a replacement string: ASS tags like \c would be read as escapes
-                text = re.sub(rf"(?<![\w{{]){re.escape(esc)}(?!\w)", lambda _m, s=marked: s, text, count=1)
+        # colour key words per token (matching the joined text missed a word right after "\N")
+        shown = [f"{HIGHLIGHT}{t}" + r"{\r}" if bare(w.word) in emphasis else t for t, w in zip(tokens, chunk)]
+        text = two_lines(tokens, shown=shown)
         end = _chunk_end(chunk, chunks[ci + 1] if ci + 1 < len(chunks) else None)
         events.append((chunk[0].start, end, text))
     return events

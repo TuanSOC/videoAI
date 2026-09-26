@@ -34,7 +34,8 @@ def kinds(cues, kind):
 def test_whoosh_just_before_each_cut_with_spacing():
     script, tl = make(["Một hai ba bốn năm sáu bảy tám chín mười."] * 6)
     cues = sfx.detect_cues(script, tl, cut_times=[6.0, 8.0, 17.0])   # 8.0 is too close to 6.0
-    assert kinds(cues, "whoosh") == [round(6.0 - sfx.WHOOSH_LEAD, 2), round(17.0 - sfx.WHOOSH_LEAD, 2)]
+    half = sfx.TRANSITION / 2                                        # peak mid-dissolve
+    assert kinds(cues, "whoosh") == [round(6.0 - half, 2), round(17.0 - half, 2)]
 
 
 def test_hook_gets_an_impact_and_shock_words_are_capped():

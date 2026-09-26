@@ -10,6 +10,10 @@ from vidgen.models import WordTiming
 
 log = logging.getLogger(__name__)
 TICKS_PER_SECOND = 10_000_000
+# edge-tts MP3s carry no Xing/LAME header, so decoding keeps the encoder delay + decoder padding:
+# the audio starts ~46 ms later than the WordBoundary offsets say (measured: onset 0.123 s for a
+# boundary at 0.080 s). Shift the words, or captions and sound effects fire early.
+MP3_DELAY = 0.046
 
 
 class TTSError(RuntimeError):
@@ -27,7 +31,7 @@ async def synth_edge(text: str, voice: str, out: Path, attempts: int = 4,
                 if chunk["type"] == "audio":
                     audio += chunk["data"]
                 elif chunk["type"] == "WordBoundary":
-                    start = chunk["offset"] / TICKS_PER_SECOND
+                    start = chunk["offset"] / TICKS_PER_SECOND + MP3_DELAY
                     words.append(WordTiming(word=chunk["text"], start=start,
                                             end=start + chunk["duration"] / TICKS_PER_SECOND))
             if not audio:

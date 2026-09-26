@@ -62,7 +62,8 @@ def select_passages(extract: str, keywords: list[str], budget: int = CHARS_PER_S
             paragraphs.append(line)
     if not paragraphs:
         return ""
-    kw = {k.casefold() for k in keywords if k.strip()}
+    # word by word: "tuần hoàn" / "blood pressure" can never equal a single word of a paragraph
+    kw = set().union(*(_words(k) for k in keywords))
     scored = sorted(((len(_words(p) & kw), i) for i, p in enumerate(paragraphs[1:], 1)), reverse=True)
     chosen, used = {0}, len(paragraphs[0])
     for score, i in scored:

@@ -125,6 +125,7 @@ class Asset(BaseModel):
     rejected: list[str] = []  # clips the user swapped away from this scene (uid or page url)
     vision_score: int | None = None  # 0-10 from the vision judge; None = not judged
     extra: list[str] = []     # second clip(s) for long scenes, cut in as another shot
+    extra_uids: list[str] = []  # their stock ids: a swap elsewhere must not reuse them
 
     @property
     def ident(self) -> str:

@@ -98,6 +98,7 @@ class VisionJudge:
             }, timeout=TIMEOUT_LOADED if self.loaded else TIMEOUT)
         except httpx.HTTPError as e:
             log.warning("vision judge unavailable: %s", e)
+            self.loaded = False  # it may have been unloaded meanwhile: allow the full load time next call
             return self._failed()
         if resp.status_code != 200:
             if "not found" in resp.text:

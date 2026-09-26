@@ -6,5 +6,9 @@ __pycache__/
 output/
 cache/
 assets/music/**/*.mp3
+assets/music/**/*.m4a
+assets/music/**/*.wav
+assets/music/**/*.ogg
+assets/music/**/*.flac
 .codegraph/
 assets/sfx/**/synth_*.wav

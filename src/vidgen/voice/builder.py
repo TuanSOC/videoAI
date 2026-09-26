@@ -13,7 +13,6 @@ across 100+ scenes the way summed MP3 estimates would.
 import asyncio
 import functools
 import logging
-import unicodedata
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +23,7 @@ from vidgen import ffmpeg
 from vidgen.config import Settings
 from vidgen.fsutil import write_atomic
 from vidgen.models import Scene, SceneAudio, Script, Timeline, WordTiming
+from vidgen.text import align, bare
 from vidgen.voice.tts import TTSError, synth_edge
 
 log = logging.getLogger(__name__)
@@ -49,11 +49,6 @@ def build_timeline(scene_ids: list[int], paths: list[str], durations: list[float
         scenes.append(SceneAudio(scene_id=sid, path=path, start=cursor, duration=dur, words=shifted))
         cursor += dur
     return Timeline(scenes=scenes)
-
-
-def _bare(token: str) -> str:
-    # NFC: the same Vietnamese letter can be one code point or base + combining mark
-    return "".join(ch for ch in unicodedata.normalize("NFC", token.casefold()) if ch.isalnum())
 
 
 def scene_bounds(prev_end: float, next_start: float) -> tuple[float, float]:
@@ -90,28 +85,27 @@ def plan_groups(scenes: list[Scene], max_words: int = MAX_GROUP_WORDS) -> list[l
 
 
 def split_by_scene(scenes: list[Scene], words: list[WordTiming]) -> list[list[WordTiming]] | None:
-    """Assign a group's word boundaries to its scenes. TTS reports each word as written, but may split
-    one token in two ("AI-generated"), so boundaries are concatenated until they spell the token.
-    None when they don't line up — the caller then voices those scenes one by one."""
-    words = [w for w in words if _bare(w.word)]  # punctuation-only boundaries carry no word
-    out: list[list[WordTiming]] = []
-    i = 0
-    for sc in scenes:
-        mine: list[WordTiming] = []
-        for token in filter(None, (_bare(t) for t in sc.narration.split())):
-            acc = ""
-            while len(acc) < len(token):
-                if i >= len(words):
-                    return None
-                acc += _bare(words[i].word)
-                mine.append(words[i])
-                i += 1
-            if acc != token:
-                return None
-        if not mine:
+    """Assign a group's word boundaries to its scenes. TTS may split one token into several boundaries
+    ("AI-generated") or merge several tokens into one ("năm 2013,"); text.align pairs them up.
+    None when they don't line up, or a boundary spans two scenes — the caller then voices those scenes
+    one by one."""
+    words = [w for w in words if bare(w.word)]  # punctuation-only boundaries carry no word
+    tokens: list[str] = []
+    owner: list[int] = []
+    for k, sc in enumerate(scenes):
+        for t in sc.narration.split():
+            tokens.append(t)
+            owner.append(k)
+    groups = align(tokens, [w.word for w in words])
+    if groups is None:
+        return None
+    out: list[list[WordTiming]] = [[] for _ in scenes]
+    for token_ids, word_ids in groups:
+        scene_ids = {owner[t] for t in token_ids}
+        if len(scene_ids) != 1:
             return None
-        out.append(mine)
-    return out if i == len(words) else None
+        out[scene_ids.pop()] += [words[k] for k in word_ids]
+    return out if all(out) else None
 
 
 @dataclass

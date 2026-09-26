@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import shutil
 from pathlib import Path
 
@@ -23,6 +24,8 @@ SFX_FILE = "sfx.json"      # the cues the render placed, for inspection
 PART_FILE = "final.part.mp4"  # the encode in progress
 MUSIC_UNDER_VOICE_DB = 18  # music sits this far below the voice's mean level...
 FALLBACK_MUSIC_DB = -9.1   # ...or at the old fixed 0.35 gain when a level can't be measured
+MUSIC_GAIN_RANGE = (-40.0, 6.0)
+SILENT_DB = -60.0
 LOUDNESS = "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000"  # -14 LUFS: YouTube/TikTok target
 STEREO = "aresample=48000,aformat=channel_layouts=stereo"
 FADE_IN, FADE_OUT = 1.5, 2   # seconds of music fade at the start and the end
@@ -32,10 +35,13 @@ LIMIT = "alimiter=limit=0.89:attack=5:release=50:level=disabled"  # SFX transien
 
 
 def music_gain_db(voice_mean: float | None, music_mean: float | None) -> float:
-    """Gain putting the track MUSIC_UNDER_VOICE_DB below the voice (both as measured means)."""
-    if voice_mean is None or music_mean is None:
+    """Gain putting the track MUSIC_UNDER_VOICE_DB below the voice (both as measured means). A silent
+    or near-silent track is "unmeasurable" (it would get +50 dB of noise), and the gain is clamped."""
+    if voice_mean is None or music_mean is None or not all(map(math.isfinite, (voice_mean, music_mean))) \
+            or music_mean < SILENT_DB:
         return FALLBACK_MUSIC_DB
-    return round(voice_mean - MUSIC_UNDER_VOICE_DB - music_mean, 1)
+    return round(min(max(voice_mean - MUSIC_UNDER_VOICE_DB - music_mean, *MUSIC_GAIN_RANGE[:1]),
+                     MUSIC_GAIN_RANGE[1]), 1)
 
 
 def audio_filter(has_music: bool, duration: float = 0.0, music_db: float = FALLBACK_MUSIC_DB,

@@ -13,24 +13,34 @@ Sounds are synthesised with FFmpeg the first time they are needed (no licence qu
 file the user drops into assets/sfx/<kind folder>/ is used instead.
 """
 
+import logging
 import random
+import subprocess
+import tempfile
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
+import numpy as np
+
 from vidgen import ffmpeg
-from vidgen.assemble.subtitles import _bare, _is_number, display_words
+from vidgen.assemble.clips import TRANSITION
+from vidgen.assemble.music import AUDIO_EXTS
+from vidgen.assemble.subtitles import display_words
 from vidgen.models import Script, Timeline, WordTiming
+from vidgen.text import bare, ends_with, is_number
 
 FOLDERS = {"whoosh": "whooshes", "impact": "impacts", "pop": "pops"}
 PRIORITY = ("impact", "whoosh", "pop")      # who wins when two cues collide
-AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".ogg", ".flac"}
+log = logging.getLogger(__name__)
 VARIANTS = 3
-WHOOSH_LEAD = 0.25     # the whoosh swells into the cut
+SYNTH = "synth2_"      # generated files; older synth_* ones (unnormalised, far too quiet) are replaced
 MIN_GAP = 0.6          # seconds between any two cues
 SAMPLE_RATE = 48000
-# level of each kind in the SFX track (synth sounds peak around -3 dBFS; the voice averages ~-18 dBFS)
-# measured live: at these levels SFX peaks sit ~7 dB under the voice's peaks (audible, never on top)
-GAIN_DB = {"whoosh": -8.0, "impact": -3.0, "pop": -9.0}
+SOURCE_PEAK_DB = -3.0  # every library sound is normalised to this peak...
+# ...and placed at these levels: SFX peaks ~10 dB under the voice's (~-3 dBFS) peaks — heard, never on top
+GAIN_DB = {"whoosh": -10.0, "impact": -8.0, "pop": -10.0}
+ENVELOPE_RATE = 1000   # envelope samples per second, for finding where a sound peaks
 
 # words that turn a sentence (bare, lower-case; multi-word entries match consecutive words)
 SHOCK = {
@@ -45,7 +55,7 @@ SHOCK = {
 @dataclass(frozen=True)
 class Cue:
     kind: str
-    time: float        # seconds from the start of the video
+    time: float        # seconds from the start of the video at which the sound PEAKS
     variant: int = 0   # which sound of the kind (taken modulo the library size)
 
 
@@ -72,17 +82,17 @@ def _sentences(words: list[WordTiming]) -> list[list[WordTiming]]:
     out, current = [], []
     for w in words:
         current.append(w)
-        if w.word.rstrip("'\"”’»)").endswith((".", "!", "?", "…")):
+        if ends_with(w.word):
             out.append(current)
             current = []
     return out + ([current] if current else [])
 
 
 def _shock_hit(sentence: list[WordTiming], phrases: list[list[str]]) -> WordTiming | None:
-    bare = [_bare(w.word) for w in sentence]
-    for i in range(len(bare)):
+    keys = [bare(w.word) for w in sentence]
+    for i in range(len(keys)):
         for phrase in phrases:
-            if bare[i:i + len(phrase)] == phrase:
+            if keys[i:i + len(phrase)] == phrase:
                 return sentence[i]
     return None
 
@@ -101,7 +111,8 @@ def detect_cues(script: Script, timeline: Timeline, cut_times: list[float], dens
     words = display_words(script, timeline)
     candidates: dict[str, list[float]] = {"whoosh": [], "impact": [], "pop": []}
 
-    candidates["whoosh"] = _keep([max(0.0, c - WHOOSH_LEAD) for c in sorted(cut_times)],
+    # peak in the middle of the dissolve (the picture changes over the TRANSITION before the cut)
+    candidates["whoosh"] = _keep([round(max(0.0, c - TRANSITION / 2), 3) for c in sorted(cut_times)],
                                  rules.whoosh_cap, rules.whoosh_spacing)
 
     impacts = [0.0] if words else []  # the hook: the very first moment
@@ -113,7 +124,7 @@ def detect_cues(script: Script, timeline: Timeline, cut_times: list[float], dens
                 impacts.append(round(hit.start, 3))
     candidates["impact"] = _keep(impacts, rules.impact_cap, rules.impact_spacing)
 
-    candidates["pop"] = _keep([round(w.start, 3) for w in words if _is_number(w.word)],
+    candidates["pop"] = _keep([round(w.start, 3) for w in words if is_number(w.word)],
                               rules.pop_cap, rules.pop_spacing)
 
     # stronger kinds claim their moment first; a weaker cue too close to an accepted one is dropped
@@ -149,40 +160,101 @@ def _synth_args(kind: str, k: int, out: Path) -> list[str]:
     return ["-f", "lavfi", "-i", graph, "-c:a", "pcm_s16le", str(out)]
 
 
+def _normalise(path: Path) -> None:
+    peak = ffmpeg.volume_stats(path)[1]
+    if peak is not None and abs(peak - SOURCE_PEAK_DB) > 0.3:
+        tmp = path.with_name(f".{path.stem}.norm.wav")
+        ffmpeg.run(["-i", str(path), "-af", f"volume={SOURCE_PEAK_DB - peak:.2f}dB", "-c:a", "pcm_s16le", str(tmp)])
+        tmp.replace(path)
+
+
+def _usable(path: Path) -> bool:
+    try:
+        return ffmpeg.duration(path) > 0
+    except ffmpeg.FFmpegError:
+        return False
+
+
 def ensure_library(root: Path) -> dict[str, list[Path]]:
-    """Sounds per kind: the user's files if the folder has any, else synthesised ones (made once)."""
+    """Sounds per kind: the user's (playable) files if the folder has any, else synthesised ones
+    (made once, normalised to SOURCE_PEAK_DB)."""
     library: dict[str, list[Path]] = {}
     for kind, folder in FOLDERS.items():
         d = root / folder
         d.mkdir(parents=True, exist_ok=True)
         files = sorted(p for p in d.iterdir() if p.suffix.lower() in AUDIO_EXTS)
-        mine = [p for p in files if not p.name.startswith("synth_")]
-        if mine:
-            library[kind] = mine
+        for stale in (p for p in files if p.name.startswith("synth") and not p.name.startswith(SYNTH)):
+            stale.unlink(missing_ok=True)
+        mine = [p for p in files if not p.name.startswith("synth")]
+        usable = [p for p in mine if _usable(p)]
+        for bad in set(mine) - set(usable):
+            log.warning("sfx: skipping unreadable file %s", bad)
+        if usable:
+            library[kind] = usable
             continue
-        synth = [d / f"synth_{kind}_{k + 1}.wav" for k in range(VARIANTS)]
+        synth = [d / f"{SYNTH}{kind}_{k + 1}.wav" for k in range(VARIANTS)]
         for k, path in enumerate(synth):
             if not path.exists():
                 ffmpeg.run(_synth_args(kind, k, path))
+                _normalise(path)
         library[kind] = synth
     return library
 
 
+def envelope(path: Path) -> np.ndarray:
+    """Peak level per 1/ENVELOPE_RATE s (mono), for finding where a sound hits hardest."""
+    rate = ENVELOPE_RATE * 8
+    raw = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path), "-ac", "1",
+                          "-ar", str(rate), "-f", "s16le", "-"], capture_output=True).stdout
+    samples = np.abs(np.frombuffer(raw, dtype=np.int16).astype(np.int32))
+    n = len(samples) // 8
+    return samples[:n * 8].reshape(n, 8).max(axis=1) if n else np.zeros(1)
+
+
+@lru_cache(maxsize=64)
+def _peak_offset(path: str, mtime: float) -> float:
+    return float(np.argmax(envelope(Path(path)))) / ENVELOPE_RATE
+
+
+def peak_offset(path: Path) -> float:
+    """Seconds from the start of a sound to its loudest moment (whooshes swell; impacts hit at once)."""
+    return _peak_offset(str(path), path.stat().st_mtime)
+
+
 def build_sfx_track(cues: list[Cue], library: dict[str, list[Path]], duration: float, out: Path) -> Path | None:
-    """All cues on one stereo track exactly `duration` long, or None when there is nothing to play."""
+    """All cues on one stereo track exactly `duration` long, each placed so its PEAK lands on cue.time,
+    or None when there is nothing to play. Each sound file is an input once (asplit per use) and the
+    graph goes through a file: hundreds of cues would overflow the Windows command line otherwise."""
     cues = [c for c in cues if library.get(c.kind) and c.time < duration]
     if not cues:
         return None
-    inputs: list[str] = []
-    chains: list[str] = []
-    for i, c in enumerate(cues):
+    files: list[Path] = []
+    uses: dict[int, list[int]] = {}
+    placed: list[tuple[int, Cue]] = []
+    for c in cues:
         sounds = library[c.kind]
-        inputs += ["-i", str(sounds[c.variant % len(sounds)])]
-        ms = max(0, round(c.time * 1000))
-        chains.append(f"[{i}:a]aresample={SAMPLE_RATE},aformat=channel_layouts=stereo,"
-                      f"volume={GAIN_DB[c.kind]}dB,adelay={ms}|{ms}[s{i}]")
-    mix = "".join(f"[s{i}]" for i in range(len(cues)))
-    graph = ";".join(chains) + (f";{mix}amix=inputs={len(cues)}:duration=longest:normalize=0,"
-                                f"apad=whole_dur={duration:.3f},atrim=end={duration:.3f}[out]")
-    ffmpeg.run([*inputs, "-filter_complex", graph, "-map", "[out]", "-c:a", "pcm_s16le", str(out)])
+        path = sounds[c.variant % len(sounds)]
+        if path not in files:
+            files.append(path)
+        k = files.index(path)
+        uses.setdefault(k, []).append(len(placed))
+        placed.append((k, c))
+    chains = []
+    for k, idx in uses.items():
+        labels = "".join(f"[u{i}]" for i in idx)
+        chains.append(f"[{k}:a]aresample={SAMPLE_RATE},aformat=channel_layouts=stereo,asplit={len(idx)}{labels}")
+    for i, (k, c) in enumerate(placed):
+        start = c.time - peak_offset(files[k])
+        trim = f"atrim=start={-start:.3f},asetpts=PTS-STARTPTS," if start < 0 else ""
+        ms = max(0, round(start * 1000))
+        chains.append(f"[u{i}]{trim}volume={GAIN_DB[c.kind]}dB,adelay={ms}|{ms}[s{i}]")
+    # a silent bed exactly `duration` long sets the length (apad after a big amix stopped short)
+    mix = f"[{len(files)}:a]" + "".join(f"[s{i}]" for i in range(len(placed)))
+    chains.append(f"{mix}amix=inputs={len(placed) + 1}:duration=first:normalize=0,atrim=end={duration:.3f}[out]")
+    with tempfile.TemporaryDirectory() as tmp:
+        graph = Path(tmp) / "sfx_graph.txt"
+        graph.write_text(";\n".join(chains), encoding="utf-8")
+        inputs = [a for f in files for a in ("-i", str(f))]
+        inputs += ["-f", "lavfi", "-t", f"{duration:.3f}", "-i", f"anullsrc=r={SAMPLE_RATE}:cl=stereo"]
+        ffmpeg.run([*inputs, "-/filter_complex", str(graph), "-map", "[out]", "-c:a", "pcm_s16le", str(out)])
     return out

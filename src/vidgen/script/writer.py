@@ -71,10 +71,17 @@ def target_seconds(preset: FormatPreset) -> int:
     return (lo + hi) // 2
 
 
-def angle_block(angle: Angle | None) -> str:
+def angle_block(angle: Angle | None, opening: bool = True) -> str:
+    """The editor's angle for a prompt. `opening` only for prompts that write the video's opening (the
+    short draft, the long outline): given to a chapter, an expansion or a one-scene rewrite, "use the
+    hook as the first sentence, cover every point" pulled the model into repeating the hook and merging
+    other scenes' ideas."""
     if angle is None:
         return "No angle was chosen: pick the most interesting one supported by the reference material."
     points = "\n".join(f"- {p}" for p in angle.key_points)
+    if not opening:
+        return (f"Angle of the whole video (for context; this part covers only its own share):\n"
+                f"Title: {angle.title}\nPoints of the whole video:\n{points}")
     return (f"Angle chosen by the editor (follow it):\n"
             f"Title: {angle.title}\n"
             f"Opening hook (use as the first sentence; light polishing allowed): {angle.hook}\n"
@@ -87,12 +94,13 @@ def generate(topic: str, fmt: Format, lang: Lang, preset: FormatPreset, llm: LLM
     `angle` is the brief the user picked: its title is kept verbatim, its hook and points steer the script."""
     sources = sources or []
     ctx = {"facts": facts_block(sources), "angle": angle_block(angle)}
+    body = {**ctx, "angle": angle_block(angle, opening=False)}  # chapters, expansions
     seconds = target_seconds(preset)
     words = int(seconds * WORDS_PER_SECOND[lang])
     if fmt == "short":
-        title, hook, mood, scenes = _generate_short(topic, lang, preset, llm, seconds, words, ctx)
+        title, hook, mood, scenes = _generate_short(topic, lang, preset, llm, seconds, words, ctx, body)
     else:
-        title, hook, mood, scenes = _generate_long(topic, lang, preset, llm, seconds, words, ctx)
+        title, hook, mood, scenes = _generate_long(topic, lang, preset, llm, seconds, words, ctx, body)
     if angle is not None:
         title = angle.title
     return Script(title=title, hook=hook, lang=lang, format=fmt, mood=normalize_mood(mood),
@@ -133,11 +141,16 @@ def expand_scenes(scenes: list[LLMScene], target_words: int, ctx: dict, lang: st
     last = len(scenes) - 1 if pin_last else len(scenes)  # new scenes may follow scenes 1..last
     if current >= target_words or last < 1:  # a lone closing question has no room after it
         return None
+    placement = ("Scene 1 is the opening hook and the last scene is the closing question: never put a new "
+                 f"scene before 1 or after the last one (`after` from 1 to {last})." if pin_last else
+                 f"These scenes are one part of a longer video: `after` from 1 to {last}; a new scene may "
+                 "also follow the last one.")
     listing = "\n".join(f"{k}. {s.narration}" for k, s in enumerate(scenes, 1))
     new_count = max(1, round((target_words - current) / WORDS_PER_NEW_SCENE))
     try:
         added = llm.generate(_render("expand.md", scenes=listing, current_words=current,
                                      target_words=target_words, new_scenes=new_count, count=len(scenes),
+                                     placement=placement,
                                      lang_name=LANG_NAMES[lang], **ctx), ExpandedScenes).new_scenes
     except Exception as e:  # LLM trouble just means "keep the draft"
         log.warning("expanding the script failed: %s", e)
@@ -155,12 +168,14 @@ def expand_scenes(scenes: list[LLMScene], target_words: int, ctx: dict, lang: st
     return out
 
 
-def _generate_with_length(llm: LLMChain, prompt: str, schema, target_words: int, ctx: dict, lang: str):
-    """Draft, then if it's under MIN_LENGTH_RATIO of the target, expand it (see expand_scenes)."""
+def _generate_with_length(llm: LLMChain, prompt: str, schema, target_words: int, ctx: dict, lang: str,
+                          pin_last: bool = True):
+    """Draft, then if it's under MIN_LENGTH_RATIO of the target, expand it (see expand_scenes).
+    pin_last: the draft ends with the video's closing question (a whole short, the final chapter)."""
     draft = llm.generate(prompt, schema)
     if _draft_words(draft) >= target_words * MIN_LENGTH_RATIO:
         return draft
-    expanded = expand_scenes(draft.scenes, target_words, ctx, lang, llm)
+    expanded = expand_scenes(draft.scenes, target_words, ctx, lang, llm, pin_last=pin_last)
     return draft.model_copy(update={"scenes": expanded}) if expanded else draft
 
 
@@ -179,7 +194,8 @@ def rewrite_one(script: Script, scene: Scene, prev: str, nxt: str, instruction: 
     wants_shorter = any(h in instr.lower() for h in SHORTER_HINTS)
     limit = min(MAX_SCENE_WORDS, current_words - 1) if wants_shorter and current_words > 3 else MAX_SCENE_WORDS
     prompt = _render(
-        "rewrite_scene.md", title=script.title, lang_name=LANG_NAMES[script.lang], angle=angle_block(angle),
+        "rewrite_scene.md", title=script.title, lang_name=LANG_NAMES[script.lang],
+        angle=angle_block(angle, opening=scene.id == script.scenes[0].id),
         facts=facts_block(sources), prev=prev or "(none — this is the opening)", current=scene.narration,
         next=nxt or "(none — this is the ending)", instruction=instr, max_words=limit,
         current_words=current_words)
@@ -215,7 +231,7 @@ def extend_script(script: Script, preset: FormatPreset, llm: LLMChain, sources: 
     """"Kéo dài" button: bring an existing script toward the middle of the format's target length.
     Long videos are extended chapter by chapter (a 100-scene prompt would not fit the context);
     the deficit is shared in proportion to each chapter's length. None if nothing could be added."""
-    ctx = {"facts": facts_block(sources or []), "angle": angle_block(angle)}
+    ctx = {"facts": facts_block(sources or []), "angle": angle_block(angle, opening=False)}
     target = int(target_seconds(preset) * WORDS_PER_SECOND[script.lang])
     total = script.word_count
     if total == 0 or total >= target:
@@ -245,16 +261,16 @@ def extend_script(script: Script, preset: FormatPreset, llm: LLMChain, sources: 
     return script.model_copy(update={"scenes": postprocess(out, preset.max_ai_video)})
 
 
-def _generate_short(topic, lang, preset, llm, seconds, words, ctx):
+def _generate_short(topic, lang, preset, llm, seconds, words, ctx, body):
     prompt = _render(
         "short.md", topic=topic, **ctx, lang_name=LANG_NAMES[lang], target_words=words,
         target_seconds=seconds, scene_range="8-14", max_ai_video=preset.max_ai_video,
     )
-    draft = _generate_with_length(llm, prompt, ShortDraft, words, ctx, lang)
+    draft = _generate_with_length(llm, prompt, ShortDraft, words, body, lang)
     return draft.title, draft.hook, draft.mood, [Scene(id=0, **s.model_dump()) for s in draft.scenes]
 
 
-def _generate_long(topic, lang, preset, llm, seconds, words, ctx):
+def _generate_long(topic, lang, preset, llm, seconds, words, ctx, body):
     n_chapters = max(3, round(seconds / SECONDS_PER_CHAPTER))
     outline = llm.generate(
         _render("long_outline.md", topic=topic, **ctx, lang_name=LANG_NAMES[lang],
@@ -275,12 +291,12 @@ def _generate_long(topic, lang, preset, llm, seconds, words, ctx):
         try:  # one chapter the model can't write must not lose the outline and every other chapter
             draft = _generate_with_length(
                 llm,
-                _render("long_chapter.md", title=outline.title, **ctx, outline=outline_text, chapter_index=i,
+                _render("long_chapter.md", title=outline.title, **body, outline=outline_text, chapter_index=i,
                         chapter_count=len(outline.chapters), chapter_title=ch.title,
                         chapter_summary=ch.summary, position_note=note, lang_name=LANG_NAMES[lang],
                         # spread the AI-video budget: one slot per chapter for the first N chapters
                         target_words=per_chapter, max_ai_video=1 if i <= preset.max_ai_video else 0),
-                ChapterDraft, per_chapter, ctx, lang,
+                ChapterDraft, per_chapter, body, lang, pin_last=i == len(outline.chapters),
             )
         except Exception as e:
             log.warning("chapter %d (%s) failed, skipping it: %s", i, ch.title, e)
@@ -311,7 +327,8 @@ def _pieces(text: str, max_words: int) -> list[str]:
 
 def split_narration(text: str, max_words: int = MAX_SCENE_WORDS) -> list[str]:
     """Greedily group sentence/clause pieces into chunks of at most max_words, then fold fragments
-    shorter than MIN_SCENE_WORDS into a neighbour (a 2-word scene flashes by in under a second)."""
+    shorter than MIN_SCENE_WORDS into a neighbour (a 2-word scene flashes by in under a second).
+    The fold makes max_words a soft limit: a scene may end up to MIN_SCENE_WORDS - 1 words over."""
     chunks: list[str] = []
     current: list[str] = []
     for piece in _pieces(text, max_words):
@@ -339,6 +356,10 @@ def split_narration(text: str, max_words: int = MAX_SCENE_WORDS) -> list[str]:
     return merged
 
 
+def default_ai_prompt(query: str) -> str:
+    return f"photorealistic cinematic shot of {query}, natural lighting"
+
+
 def postprocess(scenes: list[Scene], max_ai_video: int) -> list[Scene]:
     """Split long scenes, cap AI video count, fill missing AI prompts, renumber ids from 1."""
     out: list[Scene] = []
@@ -351,13 +372,20 @@ def postprocess(scenes: list[Scene], max_ai_video: int) -> list[Scene]:
             ai_videos += 1
             if ai_videos > max_ai_video:
                 vtype = "ai_image"
+        query, alts = scene.visual_query, clean_alt_queries(scene.visual_query, scene.alt_queries)
+        if not query.isascii():  # stock search is English-only (seen live: a Vietnamese query)
+            if alts:
+                query, alts = alts[0], alts[1:]
+            elif out:
+                query = out[-1].visual_query
         ai_prompt = scene.ai_prompt
         if vtype != "stock" and not ai_prompt:
-            ai_prompt = f"photorealistic cinematic shot of {scene.visual_query}, natural lighting"
+            ai_prompt = default_ai_prompt(query)
         for i, part in enumerate(split_narration(scene.narration)):
             out.append(scene.model_copy(update={
                 "id": len(out) + 1,
-                "alt_queries": clean_alt_queries(scene.visual_query, scene.alt_queries),
+                "visual_query": query,
+                "alt_queries": alts,
                 "narration": part,
                 # only the first split part keeps the AI treatment; the rest use stock
                 "visual_type": vtype if i == 0 else "stock",

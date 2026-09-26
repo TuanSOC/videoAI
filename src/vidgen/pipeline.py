@@ -373,8 +373,8 @@ def invalidate_stage(out_dir: Path, stage: str) -> None:
 def swap_clip(out_dir: Path, s: Settings, scene_id: int, query: str | None = None) -> Asset:
     """Replace one scene's visual (next alternate, or a search for `query`), then drop only the
     rendered video: re-rendering reuses every other clip and refreshes metadata credits without the LLM."""
-    from vidgen.visuals.selector import (Selector, llm_judge, stock_clients, video_subject, vision_judge,
-                                         vision_session)
+    from vidgen.visuals.selector import (Selector, llm_judge, stock_clients, used_ids, video_subject,
+                                         vision_judge, vision_session)
 
     script, assets = Job(out_dir, s).read_script(), Job(out_dir, s).read_assets()
     scene = next((sc for sc in script.scenes if sc.id == scene_id), None)
@@ -385,7 +385,7 @@ def swap_clip(out_dir: Path, s: Settings, scene_id: int, query: str | None = Non
     selector = Selector(stock_clients(s), None, s.preset(script.format), out_dir, s.path(s.pipeline.cache_dir),
                         subject=video_subject([sc.visual_query for sc in script.scenes]),
                         judge=llm_judge(s), vision=vision_judge(s))
-    used = {x for a in assets for x in (a.uid, a.url) if x}
+    used = used_ids(assets)
     with vision_session(selector, s):
         new = selector.swap(scene, seconds, current, used, query)
 

@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from vidgen.config import FormatPreset, Settings
 from vidgen.fsutil import write_atomic
 from vidgen.models import Alternate, Asset, Scene, Script, Timeline
+from vidgen.script.writer import default_ai_prompt
 from vidgen.visuals.stock import Candidate, Pexels, Pixabay, StockClient, download, url_suffix
 
 log = logging.getLogger(__name__)
@@ -200,7 +201,7 @@ class Selector:
         self._new_scene()
         self.pool: ThreadPoolExecutor | None = None  # set while sourcing a whole video
         self.pending: list[tuple[Scene, Asset, Future]] = []
-        self.extra_pending: list[tuple[Asset, str, Future]] = []
+        self.extra_pending: list[tuple[Asset, str, str, Future]] = []
 
     def _new_scene(self) -> None:
         """Vision state is per scene: budget, whether the judge answered, clips it rejected, and the best
@@ -208,6 +209,7 @@ class Selector:
         self.vision_calls: dict[str, int] = {"video": 0, "image": 0}
         self.vision_ok = False
         self.vision_rejected: set[str] = set()
+        self.judged: dict[str, tuple[int, int]] = {}  # uid → (raw, adjusted): never shown to the model twice
         self.weak: tuple[int, Candidate, str, int] | None = None  # (adjusted, clip, query, raw score)
 
     def _take_weak(self, scene: Scene) -> Asset | None:
@@ -248,7 +250,7 @@ class Selector:
     def _ai(self, scene: Scene, video: bool) -> Asset | None:
         if self.ai is None:
             return None
-        prompt = scene.ai_prompt or f"photorealistic cinematic shot of {scene.visual_query}, natural lighting"
+        prompt = scene.ai_prompt or default_ai_prompt(scene.visual_query)
         out = self.visuals_dir / f"scene_{scene.id:03d}"
         try:
             path = self.ai.video(prompt, out) if video else self.ai.image(prompt, out)
@@ -305,6 +307,7 @@ class Selector:
                 continue
             seen = self._vision_scores(scene, queries, ranked, kind)
             raw: dict[str, int] = {}
+            extra_from: list[Candidate] | None = None  # None: any ranked clip may be the extra shot
             if seen is None and self.vision_ok and strict:
                 # the model has been judging this scene but can't look at these (budget spent, no
                 # thumbnails): don't take a clip on its name alone — the best judged one is kept below
@@ -324,7 +327,9 @@ class Selector:
                     if strict or low < MIN_FALLBACK:
                         continue  # nothing good in this round: a simpler query may find better
                     good = [best_low]
-                # clips the model scored low are neither used nor offered as swaps
+                # clips the model scored low are neither used nor offered as swaps; a second shot comes
+                # only from clips it passed (not from ones it never saw)
+                extra_from = [c for c in good if adjusted[c.uid] >= MIN_VISION]
                 ranked = good + [c for c in ranked if c.uid not in adjusted]
             # weak match (the best clip misses several query words, e.g. "man eating pizza at his computer
             # screen" for "computer screen showing malware"): let the LLM read the narration and choose
@@ -343,7 +348,8 @@ class Selector:
                 best, ranked = ranked[0], ranked[1:]
                 # whole-video sourcing only: a swap replaces the main clip and drops any extra
                 long_scene = self.pool is not None and seconds > EXTRA_AFTER
-                extra = next((c for c in ranked if c.kind == kind), None) if long_scene else None
+                pool_ = ranked if extra_from is None else [c for c in extra_from if c is not best]
+                extra = next((c for c in pool_ if c.kind == kind), None) if long_scene else None
                 rest = [c for c in ranked if c is not extra]
                 asset = self._use(scene, best, query_of[best.uid], rest[:MAX_ALTERNATES])
                 if asset and extra is not None:
@@ -356,27 +362,36 @@ class Selector:
     def _vision_scores(self, scene: Scene, queries: list[str], ranked: list[Candidate],
                        kind: str) -> tuple[dict[str, int], dict[str, int]] | None:
         """(raw, adjusted) vision scores by uid for the top thumbnails, or None (no judge / no opinion)."""
-        if self.vision is None or self.vision_calls[kind] >= VISION_CALLS_PER_KIND:
+        if self.vision is None:
             return None
+        # clips judged in an earlier round keep their score: a shorter query returns them again, and
+        # re-scoring them spent the budget without ever showing the new clips
+        known = [c for c in ranked if c.uid in self.judged]
         shown, images = [], []
-        for c in ranked:
-            if len(shown) == VISION_TOP:
-                break
-            image = self._thumb(c.thumb) if c.thumb else None
-            if image:
-                shown.append(c)
-                images.append(image)
-        if not shown:
+        if self.vision_calls[kind] < VISION_CALLS_PER_KIND:
+            for c in ranked:
+                if len(shown) == VISION_TOP:
+                    break
+                if c.uid in self.judged or not c.thumb:
+                    continue
+                image = self._thumb(c.thumb)
+                if image:
+                    shown.append(c)
+                    images.append(image)
+        if shown:
+            self.vision_calls[kind] += 1
+            scores = self.vision.score(scene.narration, queries, images)
+            if scores is not None:
+                self.vision_ok = True
+                for c, s in zip(shown, scores):
+                    self.judged[c.uid] = (s, s - (IMAGE_PENALTY if c.kind == "image" else 0))
+                log.info("scene %d: vision scores %s", scene.id, {c.uid: s for c, s in zip(shown, scores)})
+            else:
+                shown = []
+        seen = known + shown
+        if not seen or not self.vision_ok:
             return None
-        self.vision_calls[kind] += 1
-        scores = self.vision.score(scene.narration, queries, images)
-        if scores is None:
-            return None
-        self.vision_ok = True
-        raw = {c.uid: s for c, s in zip(shown, scores)}
-        adjusted = {c.uid: s - (IMAGE_PENALTY if c.kind == "image" else 0) for c, s in zip(shown, scores)}
-        log.info("scene %d: vision scores %s", scene.id, raw)
-        return raw, adjusted
+        return {c.uid: self.judged[c.uid][0] for c in seen}, {c.uid: self.judged[c.uid][1] for c in seen}
 
     def _thumb(self, url: str) -> bytes | None:
         """Thumbnail bytes, cached on disk (re-sourcing a video costs no downloads). Only real images are
@@ -425,7 +440,8 @@ class Selector:
         dest = self.visuals_dir / f"scene_{scene.id:03d}b{url_suffix(c.download_url)}"
         rel = f"visuals/{dest.name}"
         asset.extra.append(rel)
-        self.extra_pending.append((asset, rel, self.pool.submit(self._fetch, c.download_url, dest)))
+        asset.extra_uids.append(c.uid)
+        self.extra_pending.append((asset, rel, c.uid, self.pool.submit(self._fetch, c.download_url, dest)))
 
     def _fetch(self, url: str, dest: Path) -> None:
         _link_or_copy(download(url, self.cache_dir, self.http), dest)
@@ -435,12 +451,13 @@ class Selector:
         (downloaded synchronously), then to a placeholder."""
         pending, self.pending = self.pending, []
         extras, self.extra_pending = self.extra_pending, []
-        for asset, rel, future in extras:
+        for asset, rel, uid, future in extras:
             try:
                 future.result()
             except Exception as e:  # an extra shot is optional: just drop it
                 log.warning("scene %d: extra clip download failed (%s)", asset.scene_id, e)
                 asset.extra.remove(rel)
+                asset.extra_uids.remove(uid)
         failed: dict[int, tuple[Scene, Asset]] = {}
         for scene, asset, future in pending:
             try:
@@ -485,11 +502,17 @@ class Selector:
                 asset = self._take_weak(scene)
             for kind in ("video", "image"):
                 if asset is None:
-                    asset = self._stock(scene, seconds, kind, query or current.query or scene.visual_query,
-                                        strict=strict)
+                    # no query typed: the scene's own queries, like the first pick (not the shortened
+                    # fallback the current clip happened to come from)
+                    asset = self._stock(scene, seconds, kind, query or None, strict=strict)
         if asset is None:
             raise SwapError("Không tìm được clip khác — thử từ khóa khác")
         return asset.model_copy(update={"rejected": rejected})
+
+
+def used_ids(assets: list[Asset]) -> set[str]:
+    """Every clip id a video already shows (main clips, their page urls for old files, extra shots)."""
+    return {x for a in assets for x in (a.uid, a.url, *a.extra_uids) if x}
 
 
 def stock_clients(s: Settings) -> list[StockClient]:

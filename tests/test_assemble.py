@@ -1,5 +1,7 @@
 import pytest
 
+from vidgen import text as textlib
+
 from vidgen.assemble import subtitles as subs
 from vidgen.assemble.clips import Shot, frame_counts, plan_shots, shot_args
 from vidgen.assemble.focus import Focus
@@ -274,7 +276,7 @@ def test_short_chunks_are_3_to_6_words_within_26_chars():
     for c in chunks[:-1]:
         assert 3 <= len(c) <= 6, c
         assert len(" ".join(c)) <= 26, c
-        assert subs._bare(c[-1]) not in subs.FUNCTION_WORDS, c
+        assert textlib.bare(c[-1]) not in subs.FUNCTION_WORDS, c
 
 
 def test_normalize_hashtags():
@@ -369,7 +371,7 @@ def test_english_phrases_no_lone_words_or_dangling_conjunctions():
             "Free decryption tools exist for specific ransomware strains, but success is not guaranteed.")
     chunks = [[x.word for x in c] for c in subs.short_chunks(ws(*text.split()))]
     assert all(len(c) >= 2 for c in chunks), chunks                      # never one word alone
-    ends = [subs._bare(c[-1]) for c in chunks if not subs._ends(c[-1], subs.SENTENCE_END)]
+    ends = [textlib.bare(c[-1]) for c in chunks if not textlib.ends_with(c[-1])]
     # (", but" stays at a line end once: every other split of that sentence breaks the 26-char line)
     assert not {"until", "to", "or"} & set(ends) and ends.count("but") <= 1, chunks
     assert all(len(" ".join(c)) <= subs.SHORT_HARD_CHARS for c in chunks)
