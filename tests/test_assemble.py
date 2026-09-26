@@ -361,3 +361,14 @@ def test_music_credit_sidecar_and_description(tmp_path):
     assert "Music:\n- Hitman Kevin MacLeod (incompetech.com)" in meta.description
     assert meta.description.rstrip().endswith("#shorts")
     assert "Music:" not in rebuild_description(old, script, []).description
+
+
+def test_english_phrases_no_lone_words_or_dangling_conjunctions():
+    text = ("Ransomware encrypts or steals data, holding it hostage until a ransom is paid. "
+            "Attackers often use cryptocurrency to avoid being traced, making prosecution harder. "
+            "Free decryption tools exist for specific ransomware strains, but success is not guaranteed.")
+    chunks = [[x.word for x in c] for c in subs.short_chunks(ws(*text.split()))]
+    assert all(len(c) >= 2 for c in chunks), chunks                      # never one word alone
+    ends = [subs._bare(c[-1]) for c in chunks if not subs._ends(c[-1], subs.SENTENCE_END)]
+    assert not {"until", "but", "to", "or"} & set(ends), chunks
+    assert all(len(" ".join(c)) <= 26 for c in chunks)

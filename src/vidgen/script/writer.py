@@ -109,8 +109,12 @@ def _draft_words(draft) -> int:
     return sum(len(s.narration.split()) for s in draft.scenes)
 
 
+class NewScene(LLMScene):
+    after: int  # number of the current scene it follows (1 = right after the opening hook)
+
+
 class ExpandedScenes(BaseModel):
-    scenes: list[LLMScene] = Field(min_length=1)
+    new_scenes: list[NewScene] = []
 
 
 WORDS_PER_NEW_SCENE = 15
@@ -120,42 +124,35 @@ def expand_scenes(scenes: list[LLMScene], target_words: int, ctx: dict, lang: st
                   llm: LLMChain, pin_last: bool = True) -> list[LLMScene] | None:
     """Grow a draft toward target_words by INSERTING scenes built from unused facts.
     Small local models ignore "write longer" when rewriting from scratch (real drafts stayed at
-    117-164 words for a ~200 target); extending a draft they can see works far better.
-    Returns None if the result isn't longer or didn't keep the original scenes."""
+    117-164 words for a ~200 target); extending a draft they can see works far better. The model only
+    writes the new scenes and says where each goes; the originals are never sent back, because asked
+    to return the full list it reordered them (seen live: a 77-word English short stayed 77 words).
+    New scenes never go before the opening hook nor (pin_last) after the closing question.
+    Returns None if nothing was added."""
     current = sum(len(s.narration.split()) for s in scenes)
-    if current >= target_words:
+    last = len(scenes) - 1 if pin_last else len(scenes)  # new scenes may follow scenes 1..last
+    if current >= target_words or last < 1:  # a lone closing question has no room after it
         return None
-    listing = json.dumps([{"narration": s.narration, "visual_query": s.visual_query} for s in scenes],
-                         ensure_ascii=False, indent=1)
+    listing = "\n".join(f"{k}. {s.narration}" for k, s in enumerate(scenes, 1))
     new_count = max(1, round((target_words - current) / WORDS_PER_NEW_SCENE))
     try:
-        result = llm.generate(_render("expand.md", scenes=listing, current_words=current,
-                                      target_words=target_words, new_scenes=new_count,
-                                      lang_name=LANG_NAMES[lang], **ctx), ExpandedScenes).scenes
+        added = llm.generate(_render("expand.md", scenes=listing, current_words=current,
+                                     target_words=target_words, new_scenes=new_count, count=len(scenes),
+                                     lang_name=LANG_NAMES[lang], **ctx), ExpandedScenes).new_scenes
     except Exception as e:  # LLM trouble just means "keep the draft"
         log.warning("expanding the script failed: %s", e)
         return None
-    grew = sum(len(s.narration.split()) for s in result) > current
-    return result if grew and _keeps_originals(scenes, result, pin_last) else None
-
-
-def _keeps_originals(original: list[LLMScene], result: list[LLMScene], pin_last: bool = True) -> bool:
-    """Every original scene is still there exactly once, in the same order, the first one still first
-    and (pin_last: the video's closing question) the last one still last. A set/percentage check let
-    reorders, drops and duplicates through."""
-    new = [s.narration.strip() for s in result]
-    old = [s.narration.strip() for s in original]
-    if not old or new[0] != old[0] or (pin_last and new[-1] != old[-1]):
-        return False
-    if any(new.count(t) != old.count(t) for t in set(old)):
-        return False
-    pos = 0
-    for text in old:  # subsequence check
-        try:
-            pos = new.index(text, pos) + 1
-        except ValueError:
-            return False
-    return True
+    known = {s.narration.strip() for s in scenes}
+    added = [a for a in added if a.narration.strip() and a.narration.strip() not in known]
+    if not added:
+        return None
+    slots: dict[int, list[LLMScene]] = {}
+    for a in added:
+        slots.setdefault(min(max(a.after, 1), last), []).append(LLMScene(**a.model_dump(exclude={"after"})))
+    out: list[LLMScene] = []
+    for k, sc in enumerate(scenes, 1):
+        out += [sc, *slots.get(k, [])]
+    return out
 
 
 def _generate_with_length(llm: LLMChain, prompt: str, schema, target_words: int, ctx: dict, lang: str):

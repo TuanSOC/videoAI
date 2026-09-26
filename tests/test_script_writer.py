@@ -115,21 +115,33 @@ def test_generate_long_outline_then_chapters():
     assert "in this chapter: 0" in first_tries[2]
 
 
+def new(after, n=20, word="mới"):
+    return {"after": after, "narration": " ".join([word] * n) + ".", "visual_query": "q"}
+
+
 def test_short_draft_is_expanded_keeping_its_scenes():
-    extra = [scene(" ".join(["mới"] * 20) + ".") for _ in range(8)]
-    expanded = {"scenes": SHORT["scenes"][:2] + extra + SHORT["scenes"][2:]}  # originals kept, in order
-    fake = FakeProvider("fake", [SHORT, expanded])
+    added = {"new_scenes": [new(2) for _ in range(4)] + [new(3) for _ in range(4)]}
+    fake = FakeProvider("fake", [SHORT, added])
     script = writer.generate("x", "short", "vi", get_settings().preset("short"), LLMChain([fake]))
     assert len(fake.prompts) == 2 and "You are extending a video script" in fake.prompts[1]
-    assert "Ships vanish here." in fake.prompts[1]          # the draft is shown to the model
+    assert "1. Ships vanish here." in fake.prompts[1]        # the draft is shown, numbered
     assert script.word_count > 150 and script.scenes[0].narration == "Ships vanish here."
+    olds = [sc.narration for sc in script.scenes if not sc.narration.startswith("mới")]
+    assert olds == [x["narration"] for x in SHORT["scenes"]]  # originals untouched, same order
 
 
-def test_expansion_that_drops_original_scenes_is_rejected():
-    rewritten = {"scenes": [scene(" ".join(["khác"] * 20) + ".") for _ in range(12)]}
-    fake = FakeProvider("fake", [SHORT, rewritten])
+def test_new_scenes_never_go_before_the_hook_or_after_the_question():
+    added = {"new_scenes": [new(0), new(99)] + [new(2) for _ in range(6)]}
+    fake = FakeProvider("fake", [SHORT, added])
     script = writer.generate("x", "short", "vi", get_settings().preset("short"), LLMChain([fake]))
-    assert script.title == "Bermuda" and script.word_count < 20  # kept the draft
+    assert script.scenes[0].narration == "Ships vanish here."
+    assert script.scenes[-1].narration == "What do you think?"
+
+
+def test_expansion_that_adds_nothing_keeps_the_draft():
+    fake = FakeProvider("fake", [SHORT, {"new_scenes": []}])
+    script = writer.generate("x", "short", "vi", get_settings().preset("short"), LLMChain([fake]))
+    assert script.title == "Bermuda" and script.word_count < 20
 
 
 def test_short_draft_keeps_first_when_retry_is_not_longer():
@@ -177,13 +189,13 @@ def test_extend_script_by_chapter_skips_intro():
 
         def generate_json(self, prompt, schema):
             self.prompts.append(prompt)
-            data = json.loads(prompt.split("Current scenes (JSON, in order):")[1].split("The script has")[0])
-            return json.dumps({"scenes": data + [scene(" ".join(["more"] * 20) + ".")]})
+            return json.dumps({"new_scenes": [new(1, word="more")]})
 
     preset = get_settings().preset("long")
     out = writer.extend_script(s, preset, LLMChain([Grow()]))
     assert out.scenes[0].narration == "Hook sentence here." and out.scenes[0].chapter == "Intro"
-    assert [sc.chapter for sc in out.scenes].count("A") == 2 and len(Grow.prompts) == 2
+    # chapter B is only the closing scene: nothing can follow it, so no LLM call for it
+    assert [sc.chapter for sc in out.scenes].count("A") == 2 and len(Grow.prompts) == 1
     assert [sc.id for sc in out.scenes] == list(range(1, len(out.scenes) + 1))
 
 
@@ -193,23 +205,6 @@ def test_extend_script_noop_when_long_enough():
     s = Script(title="t", hook="h", lang="vi", format="short",
                scenes=[Scene(id=1, narration=long_text, visual_query="q")])
     assert writer.extend_script(s, get_settings().preset("short"), LLMChain([FakeProvider("x", [SHORT])])) is None
-
-
-def test_expansion_that_moves_the_closing_question_is_rejected():
-    extra = [scene(" ".join(["mới"] * 20) + ".") for _ in range(8)]
-    moved = {"scenes": SHORT["scenes"][:3] + extra[:4] + [SHORT["scenes"][3]] + extra[4:]}  # question not last
-    fake = FakeProvider("fake", [SHORT, moved])
-    script = writer.generate("x", "short", "vi", get_settings().preset("short"), LLMChain([fake]))
-    assert script.scenes[-1].narration == "What do you think?" and script.word_count < 20
-
-
-def test_keeps_originals_requires_order():
-    a, b, c = (writer.LLMScene(narration=t, visual_query="q") for t in ("A.", "B.", "C."))
-    n = writer.LLMScene(narration="N.", visual_query="q")
-    assert writer._keeps_originals([a, b, c], [a, n, b, n, c])
-    assert not writer._keeps_originals([a, b, c], [a, c, b, n, c])   # reordered / duplicated
-    assert writer._keeps_originals([a, b], [a, b, n], pin_last=False)  # middle chapter may grow at its end
-    assert not writer._keeps_originals([a, b, c], [a, b, n])         # closing dropped
 
 
 def test_extend_script_keeps_non_contiguous_chapters_in_place():
@@ -223,9 +218,7 @@ def test_extend_script_keeps_non_contiguous_chapters_in_place():
         name = "same"
 
         def generate_json(self, prompt, schema):
-            data = json.loads(prompt.split("Current scenes (JSON, in order):")[1].split("The script has")[0])
-            first, rest = data[0], data[1:]
-            return json.dumps({"scenes": [first, scene(" ".join(["x"] * 20) + ".")] + rest})
+            return json.dumps({"new_scenes": [new(1, word="x")]})
 
     out = writer.extend_script(s, get_settings().preset("long"), LLMChain([Same()]))
     order = [sc.chapter for sc in out.scenes]
