@@ -19,6 +19,12 @@ def pick_music(music_dir: Path, seed: str, mood: str = "") -> Path | None:
     return random.Random(seed).choice(tracks) if tracks else None
 
 
+def track_credit(track: Path) -> str:
+    """Attribution the track's license asks for (CC BY), from `<track>.credit.txt` next to it; "" if none."""
+    sidecar = track.with_name(track.stem + ".credit.txt")
+    return sidecar.read_text(encoding="utf-8").strip() if sidecar.exists() else ""
+
+
 def music_start(track_seconds: float, video_seconds: float, seed: str) -> float:
     """Where to start in the track: tracks often open with a long intro; any point that leaves the whole
     video (plus a second) inside the track. Shorter tracks start at 0 and loop."""

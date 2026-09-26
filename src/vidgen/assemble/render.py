@@ -1,19 +1,22 @@
 """Segments + voice + music + burned captions → final.mp4."""
 
+import json
 import logging
 import shutil
 from pathlib import Path
 
 from vidgen import ffmpeg
 from vidgen.assemble.clips import render_segments
-from vidgen.assemble.music import music_start, pick_music
+from vidgen.assemble.music import music_start, pick_music, track_credit
 from vidgen.assemble.subtitles import build_ass
 from vidgen.config import ROOT, FormatPreset
+from vidgen.fsutil import write_atomic
 from vidgen.models import Asset, Script, Timeline
 
 log = logging.getLogger(__name__)
 FONTS_DIR = ROOT / "assets" / "fonts"
 MUSIC_DIR = ROOT / "assets" / "music"
+MUSIC_FILE = "music.json"  # track used by the render + its credit line, for the video description
 MUSIC_VOLUME = 0.35       # before ducking; sidechain pushes it further down under speech
 LOUDNESS = "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000"  # -14 LUFS: YouTube/TikTok target
 STEREO = "aresample=48000,aformat=channel_layouts=stereo"
@@ -62,4 +65,6 @@ def render_video(script: Script, timeline: Timeline, assets: list[Asset], preset
         start = music_start(ffmpeg.duration(music), timeline.duration, seed)
         log.info("music: %s (mood %s) from %.1fs", music.name, script.mood or "any", start)
     ffmpeg.run(final_args(timeline.duration, music, start), cwd=out_dir)
+    write_atomic(out_dir / MUSIC_FILE, json.dumps(
+        {"track": music.name if music else "", "credit": track_credit(music) if music else ""}, ensure_ascii=False))
     return out_dir / "final.mp4"

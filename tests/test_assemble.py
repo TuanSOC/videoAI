@@ -342,3 +342,22 @@ def test_broken_segmenter_falls_back_to_repeated_pairs(monkeypatch):
     script = Script(title="t", hook="h", lang="vi", format="short", scenes=[
         Scene(id=1, narration="Đổi mật khẩu. Mật khẩu mạnh.", visual_query="q")])
     assert subs.compound_pairs(script) == {("mật", "khẩu")}
+
+
+def test_music_credit_sidecar_and_description(tmp_path):
+    from vidgen.assemble.music import track_credit
+    from vidgen.metadata import Metadata, rebuild_description
+
+    track = tmp_path / "Hitman.mp3"
+    track.write_bytes(b"x")
+    assert track_credit(track) == ""                                    # no sidecar: nothing to credit
+    (tmp_path / "Hitman.credit.txt").write_text("Hitman Kevin MacLeod (incompetech.com)\n", encoding="utf-8")
+    assert track_credit(track) == "Hitman Kevin MacLeod (incompetech.com)"
+
+    script, _ = make("short")
+    old = Metadata(title="t", description="Tóm tắt.\n\nx", tags=[], hashtags=["#shorts"], credits=[],
+                   ai_disclosure="x", ai_visuals_used=False, summary="Tóm tắt.")
+    meta = rebuild_description(old, script, [], music_credit="Hitman Kevin MacLeod (incompetech.com)")
+    assert "Music:\n- Hitman Kevin MacLeod (incompetech.com)" in meta.description
+    assert meta.description.rstrip().endswith("#shorts")
+    assert "Music:" not in rebuild_description(old, script, []).description

@@ -98,14 +98,22 @@ def _render(job: Job) -> None:
         from vidgen.metadata import Metadata, rebuild_description, save_metadata
 
         meta = Metadata.model_validate_json(meta_path.read_text(encoding="utf-8"))
-        save_metadata(rebuild_description(meta, script, assets), meta_path)
+        save_metadata(rebuild_description(meta, script, assets, _music_credit(job.out_dir)), meta_path)
+
+
+def _music_credit(out_dir: Path) -> str:
+    from vidgen.assemble.render import MUSIC_FILE
+
+    path = out_dir / MUSIC_FILE
+    return json.loads(path.read_text(encoding="utf-8")).get("credit", "") if path.exists() else ""
 
 
 def _metadata(job: Job) -> None:
     from vidgen.metadata import generate_metadata, save_metadata
     from vidgen.script.llm import default_chain
 
-    meta = generate_metadata(job.read_script(), job.read_assets(), default_chain(job.settings))
+    meta = generate_metadata(job.read_script(), job.read_assets(), default_chain(job.settings),
+                             _music_credit(job.out_dir))
     save_metadata(meta, job.out_dir / "metadata.json")
 
 
@@ -114,7 +122,7 @@ def _metadata(job: Job) -> None:
 STAGES = [
     Stage("voice", "timeline.json", ("voice", "voice.wav"), _voice),
     Stage("visuals", "assets.json", ("visuals", "thumbs"), _visuals),
-    Stage("render", "final.mp4", ("segments", "subs.ass", "fonts"), _render),
+    Stage("render", "final.mp4", ("segments", "subs.ass", "fonts", "music.json"), _render),
     Stage("metadata", "metadata.json", (), _metadata),
 ]
 STAGE_NAMES = [st.name for st in STAGES]

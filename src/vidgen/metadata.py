@@ -68,7 +68,7 @@ def credit_lines(assets: list[Asset]) -> list[str]:
     return lines
 
 
-def generate_metadata(script: Script, assets: list[Asset], llm: LLMChain) -> Metadata:
+def generate_metadata(script: Script, assets: list[Asset], llm: LLMChain, music_credit: str = "") -> Metadata:
     narration = " ".join(s.narration for s in script.scenes)[:NARRATION_CHARS]
     llm_meta = llm.generate(PROMPT.format(
         kind="vertical short (TikTok/Shorts/Reels)" if script.format == "short" else "YouTube long-form",
@@ -77,11 +77,11 @@ def generate_metadata(script: Script, assets: list[Asset], llm: LLMChain) -> Met
     ), LLMMetadata)
 
     return _compose(llm_meta.title.strip()[:TITLE_MAX], llm_meta.description.strip(), llm_meta.tags,
-                    normalize_hashtags(llm_meta.hashtags, script.format == "short"), script, assets)
+                    normalize_hashtags(llm_meta.hashtags, script.format == "short"), script, assets, music_credit)
 
 
 def _compose(title: str, summary: str, tags: list[str], hashtags: list[str], script: Script,
-             assets: list[Asset]) -> Metadata:
+             assets: list[Asset], music_credit: str = "") -> Metadata:
     """Deterministic part of the description: disclosure, sources, footage credits, hashtags."""
     credits = credit_lines(assets)
     disclosure = DISCLOSURE[script.lang]
@@ -91,17 +91,19 @@ def _compose(title: str, summary: str, tags: list[str], hashtags: list[str], scr
         description += f"\n\n{label}:\n" + "\n".join(f"- {s.title}: {s.url}" for s in script.sources)
     if credits:
         description += "\n\nFootage:\n" + "\n".join(f"- {c}" for c in credits)
+    if music_credit:  # CC BY tracks: the license requires this line
+        description += f"\n\nMusic:\n- {music_credit}"
     description += "\n\n" + " ".join(hashtags)
     return Metadata(title=title, description=description, tags=tags, hashtags=hashtags, credits=credits,
                     ai_disclosure=disclosure, summary=summary,
                     ai_visuals_used=any(a.source in ("flux", "wan") for a in assets))
 
 
-def rebuild_description(meta: Metadata, script: Script, assets: list[Asset]) -> Metadata:
+def rebuild_description(meta: Metadata, script: Script, assets: list[Asset], music_credit: str = "") -> Metadata:
     """Refresh credits/AI flag after clips changed — no LLM call. Older files lack `summary`:
     it is the text before the disclosure line."""
     summary = meta.summary or meta.description.split(f"\n\n{meta.ai_disclosure}")[0].strip()
-    return _compose(meta.title, summary, meta.tags, meta.hashtags, script, assets)
+    return _compose(meta.title, summary, meta.tags, meta.hashtags, script, assets, music_credit)
 
 
 def save_metadata(meta: Metadata, out: Path) -> None:
