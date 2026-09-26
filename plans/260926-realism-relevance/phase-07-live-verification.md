@@ -1,10 +1,16 @@
 ---
 phase: 7
-title: "Live Verification"
-status: pending
+title: Live Verification
+status: in-progress
 priority: P1
-effort: "1.5h"
-dependencies: [1, 2, 3, 4, 5, 6]
+effort: 1.5h
+dependencies:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
 ---
 
 # Phase 7: Live Verification

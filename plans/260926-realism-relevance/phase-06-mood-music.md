@@ -1,7 +1,7 @@
 ---
 phase: 6
 title: Mood Music
-status: in-progress
+status: completed
 priority: P2
 effort: 2h
 dependencies: []

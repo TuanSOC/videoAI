@@ -289,3 +289,41 @@ def test_credit_lines_dedupe_and_skip_ai():
               Asset(scene_id=2, path="", kind="video", source="pexels", url="u1", author="Ann"),
               Asset(scene_id=3, path="", kind="image", source="flux")]
     assert credit_lines(assets) == ["Pexels by Ann: u1"]
+
+
+# --- mood music -------------------------------------------------------------------------------------
+def test_pick_music_prefers_mood_folder(tmp_path):
+    from vidgen.assemble.music import pick_music
+
+    (tmp_path / "tense").mkdir()
+    (tmp_path / "calm").mkdir()
+    (tmp_path / "tense" / "a.mp3").write_bytes(b"x")
+    (tmp_path / "calm" / "b.mp3").write_bytes(b"x")
+    assert pick_music(tmp_path, "seed", "tense").name == "a.mp3"
+    assert pick_music(tmp_path, "seed", "upbeat").name in {"a.mp3", "b.mp3"}   # empty mood → any track
+    assert pick_music(tmp_path, "seed", "calm") == pick_music(tmp_path, "seed", "calm")  # deterministic
+    assert pick_music(tmp_path / "none", "seed", "calm") is None
+
+
+def test_music_start_fits_track_and_is_deterministic():
+    from vidgen.assemble.music import music_start
+
+    assert music_start(30.0, 60.0, "s") == 0.0                  # shorter track: from the top (it loops)
+    s = music_start(180.0, 60.0, "s")
+    assert 0.0 <= s <= 180.0 - 60.0 - 1 and s == music_start(180.0, 60.0, "s")
+
+
+def test_final_args_music_offset_and_fades():
+    from pathlib import Path
+
+    args = final_args(60.0, Path("m.mp3"), music_start=12.5)
+    i = args.index("m.mp3")
+    assert args[i - 5:i - 3] == ["-ss", "12.50"]
+    audio = [args[k + 1] for k, a in enumerate(args) if a == "-filter_complex"][1]
+    assert "afade=t=in" in audio and "afade=t=out:st=58.00" in audio
+
+
+def test_script_mood_normalised():
+    from vidgen.script.writer import normalize_mood
+
+    assert normalize_mood(" Tense ") == "tense" and normalize_mood("angry") == ""

@@ -69,6 +69,7 @@ class Script(BaseModel):
     format: Literal["short", "long"]
     scenes: list[Scene] = Field(min_length=1)
     sources: list[SourceRef] = []  # reference pages the facts were drawn from
+    mood: str = ""  # background music mood (assemble/music.py MOODS); "" = any track
 
     @property
     def word_count(self) -> int:

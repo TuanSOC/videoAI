@@ -9,6 +9,7 @@ from string import Template
 
 from pydantic import BaseModel, Field
 
+from vidgen.assemble.music import MOODS
 from vidgen.config import Format, FormatPreset, Lang
 from vidgen.models import Angle, Scene, Script, SourceRef, VisualType
 from vidgen.script.llm import LLMChain
@@ -38,6 +39,7 @@ class LLMScene(BaseModel):
 class ShortDraft(BaseModel):
     title: str
     hook: str
+    mood: str = ""
     scenes: list[LLMScene] = Field(min_length=3)
 
 
@@ -50,6 +52,7 @@ class Outline(BaseModel):
     title: str
     hook: str
     hook_visual_query: str = Field(description="English stock footage query for the hook")
+    mood: str = ""
     chapters: list[Chapter] = Field(min_length=2)
 
 
@@ -85,14 +88,19 @@ def generate(topic: str, fmt: Format, lang: Lang, preset: FormatPreset, llm: LLM
     seconds = target_seconds(preset)
     words = int(seconds * WORDS_PER_SECOND[lang])
     if fmt == "short":
-        title, hook, scenes = _generate_short(topic, lang, preset, llm, seconds, words, ctx)
+        title, hook, mood, scenes = _generate_short(topic, lang, preset, llm, seconds, words, ctx)
     else:
-        title, hook, scenes = _generate_long(topic, lang, preset, llm, seconds, words, ctx)
+        title, hook, mood, scenes = _generate_long(topic, lang, preset, llm, seconds, words, ctx)
     if angle is not None:
         title = angle.title
-    return Script(title=title, hook=hook, lang=lang, format=fmt,
+    return Script(title=title, hook=hook, lang=lang, format=fmt, mood=normalize_mood(mood),
                   scenes=postprocess(scenes, preset.max_ai_video),
                   sources=[SourceRef(title=s.title, url=s.url) for s in sources])
+
+
+def normalize_mood(mood: str) -> str:
+    mood = mood.strip().casefold()
+    return mood if mood in MOODS else ""
 
 
 def _draft_words(draft) -> int:
@@ -241,7 +249,7 @@ def _generate_short(topic, lang, preset, llm, seconds, words, ctx):
         target_seconds=seconds, scene_range="8-14", max_ai_video=preset.max_ai_video,
     )
     draft = _generate_with_length(llm, prompt, ShortDraft, words, ctx, lang)
-    return draft.title, draft.hook, [Scene(id=0, **s.model_dump()) for s in draft.scenes]
+    return draft.title, draft.hook, draft.mood, [Scene(id=0, **s.model_dump()) for s in draft.scenes]
 
 
 def _generate_long(topic, lang, preset, llm, seconds, words, ctx):
@@ -272,7 +280,7 @@ def _generate_long(topic, lang, preset, llm, seconds, words, ctx):
             ChapterDraft, per_chapter, ctx, lang,
         )
         scenes += [Scene(id=0, chapter=ch.title, **s.model_dump()) for s in draft.scenes]
-    return outline.title, outline.hook, scenes
+    return outline.title, outline.hook, outline.mood, scenes
 
 
 # --- post-processing -------------------------------------------------------------------
