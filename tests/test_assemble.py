@@ -104,7 +104,7 @@ def test_plan_shots_splits_long_scenes_and_keeps_frames():
     assert s2[0].punch == 0 and s2[2].punch > 0                          # ...and framed tighter
     assert shots[0].offset >= 0.6                                        # lead-in skipped
     assert s2[0].transition_in and not shots[-1].transition_in           # no fade into a placeholder
-    assert len({s.motion for s in s2}) > 1
+    assert all(s.motion == "none" for s in s2)                           # stock video moves by itself
 
 
 def test_plan_shots_short_clip_starts_at_zero():
@@ -112,22 +112,40 @@ def test_plan_shots_short_clip_starts_at_zero():
     assert len(shots) == 1 and shots[0].offset == 0.0
 
 
-def test_shot_args_crossfade_and_grade(tmp_path):
+def test_shot_args_short_dissolve_grade_and_grain(tmp_path):
     from pathlib import Path
 
     p = get_settings().preset("short")
-    a = Shot(1, 0, "video", Path("a.mp4"), 1.0, 90, "push", focus=Focus(0.3, 0.05))
+    tf = round(0.18 * p.fps)
+    a = Shot(1, 0, "video", Path("a.mp4"), 1.0, 90, "none", focus=Focus(0.3, 0.05))
     b = Shot(2, 0, "image", Path("b.jpg"), 0.0, 90, "pan_l", transition_in=True)
     args = shot_args(a, b, p, tmp_path / "o.mp4")
     graph = args[args.index("-filter_complex") + 1]
-    assert "xfade=transition=fade" in graph and args.count("-i") == 2
+    assert f"xfade=transition=fade:duration={tf / p.fps:.4f}" in graph and args.count("-i") == 2
+    assert f"offset={(90 - tf) / p.fps:.3f}" in graph
     assert "x=(iw-ow)*0.300" in graph and "brightness=0.050" in graph and "vignette" in graph
+    assert graph.count("noise=alls=") == 2                               # grain on both inputs
     assert args[args.index("-frames:v") + 1] == "90"
-    # the incoming shot continues where the fade left off: later source offset, motion already started
+    video_chain = graph.split(";")[0]
+    assert "zoompan" not in video_chain                                  # no fake camera move on video
+    assert "zoompan" in graph.split(";")[1]                              # still images keep Ken Burns
+    # the incoming image continues where the fade left off: motion already started
     b_args = shot_args(b, None, p, tmp_path / "o.mp4")
-    assert "xfade" not in " ".join(b_args) and "(on+9)" in " ".join(b_args)
+    assert "xfade" not in " ".join(b_args) and f"(on+{tf})" in " ".join(b_args)
     color = shot_args(Shot(3, 0, "color", None, 0.0, 30, "none"), None, p, tmp_path / "o.mp4")
     assert any(x.startswith("color=") for x in color)
+
+
+def test_punch_in_video_is_a_tighter_static_frame(tmp_path):
+    from pathlib import Path
+
+    p = get_settings().preset("short")
+    plain = shot_args(Shot(1, 0, "video", Path("a.mp4"), 0, 60, "none"), None, p, tmp_path / "o.mp4")
+    punch = shot_args(Shot(1, 1, "video", Path("a.mp4"), 3, 60, "none", punch=0.22), None, p, tmp_path / "o.mp4")
+    g1, g2 = (x[x.index("-filter_complex") + 1] for x in (plain, punch))
+    assert f"scale={p.width}:{p.height}:" in g1
+    assert f"scale={round(p.width * 1.22 / 2) * 2}:{round(p.height * 1.22 / 2) * 2}:" in g2
+    assert "zoompan" not in g2
 
 
 def test_focus_finds_subject_and_brightness(tmp_path):

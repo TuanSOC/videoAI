@@ -3,11 +3,14 @@
 Editing choices (why the video feels cut, not assembled):
 - pacing: a scene longer than SHOT_MAX is split into 2-3 shots, from the scene's extra clips or
   different parts of the same clip; clips skip their first LEAD_IN seconds (fades, pans in)
-- motion: every shot slowly pushes in, pulls out or pans (stock clips often barely move)
-- transitions: the last TRANSITION seconds of a scene cross-fade into the next scene's first shot,
+- motion: stock video keeps its own camera movement (an added zoom on top looks fake); still images
+  slowly push in, pull out or pan (Ken Burns)
+- transitions: straight cuts inside a scene; the last TRANSITION seconds of a scene dissolve into the
+  next scene's first shot, at the short pause in the voice,
   rendered inside the outgoing segment so segments stay independent (parallel, stream-copy concat)
 - framing & colour: focus.analyse() picks where to crop (subject, not centre) and nudges exposure
-  toward a common level; one mild grade + vignette gives the whole video a single look
+  toward a common level; one mild grade + vignette + fine grain gives the whole video a single,
+  less "stock" look
 """
 
 from __future__ import annotations
@@ -28,12 +31,12 @@ SEGMENT_TIMEOUT_BASE = 120  # seconds, plus 0.5s per output frame
 SHOT_MAX = {"short": 3.5, "long": 6.0}  # seconds; longer scenes get several shots
 MIN_SHOT = 1.4
 LEAD_IN = 0.6          # skip the start of stock clips (fade-ins, camera settling)
-TRANSITION = 0.3       # cross-fade between scenes
-OVERSIZE = 1.12        # frame is rendered larger than the output so motion never shows edges
+TRANSITION = 0.18      # dissolve between scenes: short enough to read as a soft cut, not a fade
+OVERSIZE = 1.12        # images are rendered larger than the output so Ken Burns never shows edges
 MOTION = 0.08          # zoom amount over a shot
 MOTIONS = ("push", "pan_r", "pull", "push", "pan_l")
 PUNCH_IN = 0.22        # a clip reused within a scene is framed tighter, so the cut reads as a new shot
-GRADE = "eq=brightness={b:.3f}:contrast=1.04:saturation=1.08,vignette=angle=0.45"
+GRADE = "eq=brightness={b:.3f}:contrast=1.04:saturation=1.08,vignette=angle=0.45,noise=alls=3:allf=t"
 
 
 def frame_counts(timeline: Timeline, fps: int) -> list[int]:
@@ -63,11 +66,15 @@ class Shot:
     focus: Focus = field(default_factory=Focus)
 
 
+def fade_frames(p: FormatPreset) -> int:
+    return round(TRANSITION * p.fps)
+
+
 def plan_shots(timeline: Timeline, assets: list[Asset], p: FormatPreset, fmt: str, src_dir: Path,
                clip_seconds: dict[Path, float]) -> list[Shot]:
     """Pure planning (tested without ffmpeg): how many shots per scene, which source and which part."""
     by_scene = {a.scene_id: a for a in assets}
-    tf = round(TRANSITION * p.fps)
+    tf = fade_frames(p)
     shots: list[Shot] = []
     for si, (scene, frames) in enumerate(zip(timeline.scenes, frame_counts(timeline, p.fps), strict=True)):
         asset = by_scene.get(scene.scene_id)
@@ -93,7 +100,7 @@ def plan_shots(timeline: Timeline, assets: list[Asset], p: FormatPreset, fmt: st
                 # one use: start a little in (the start is rarely the best part); several: spread out
                 offset = lead + (spare * 0.3 if m == 1 else spare * j / (m - 1))
             shots.append(Shot(scene.scene_id, k, kind, src, round(offset, 3), size,
-                              MOTIONS[(si + k) % len(MOTIONS)] if kind != "color" else "none",
+                              MOTIONS[(si + k) % len(MOTIONS)] if kind == "image" else "none",
                               transition_in=(k == 0 and si > 0),
                               punch=PUNCH_IN if j > 0 and kind != "color" else 0.0))
     # a cross-fade needs room on both sides; otherwise it's a straight cut
@@ -118,14 +125,19 @@ def _motion(shot: Shot, p: FormatPreset, t0: int, span: int) -> str:
 def _stream(shot: Shot, p: FormatPreset, t0: int, span: int, frames: int) -> str:
     """Filter chain turning one input into `frames` output frames for this shot."""
     w, h = p.width, p.height
+    tail = f"trim=end_frame={frames},setpts=PTS-STARTPTS,setsar=1,format=yuv420p"
     if shot.kind == "color":
-        return f"scale={w}:{h},trim=end_frame={frames},setpts=PTS-STARTPTS,setsar=1,format=yuv420p"
+        return f"scale={w}:{h},{tail}"
+    grade = GRADE.format(b=shot.focus.brightness)
+    if shot.kind == "video":
+        # a punch-in is a tighter static framing: scale up, then crop the output size around the subject
+        ws, hs = round(w * (1 + shot.punch) / 2) * 2, round(h * (1 + shot.punch) / 2) * 2
+        return (f"fps={p.fps},scale={ws}:{hs}:force_original_aspect_ratio=increase,"
+                f"crop={w}:{h}:x=(iw-ow)*{shot.focus.x:.3f}:y=(ih-oh)/2,{grade},{tail}")
     wo, ho = round(w * OVERSIZE / 2) * 2, round(h * OVERSIZE / 2) * 2
-    pre = f"fps={p.fps}," if shot.kind == "video" else ""
-    return (f"{pre}scale={wo}:{ho}:force_original_aspect_ratio=increase,"
+    return (f"scale={wo}:{ho}:force_original_aspect_ratio=increase,"
             f"crop={wo}:{ho}:x=(iw-ow)*{shot.focus.x:.3f}:y=(ih-oh)/2,"
-            f"{_motion(shot, p, t0, span)},{GRADE.format(b=shot.focus.brightness)},"
-            f"trim=end_frame={frames},setpts=PTS-STARTPTS,setsar=1,format=yuv420p")
+            f"{_motion(shot, p, t0, span)},{grade},{tail}")
 
 
 def _input(shot: Shot, p: FormatPreset, offset: float) -> list[str]:
@@ -137,9 +149,9 @@ def _input(shot: Shot, p: FormatPreset, offset: float) -> list[str]:
 
 
 def shot_args(shot: Shot, nxt: Shot | None, p: FormatPreset, out: Path) -> list[str]:
-    tf = round(TRANSITION * p.fps)
+    tf = fade_frames(p)
     start_t0 = tf if shot.transition_in else 0                    # continue the cross-fade's motion
-    offset = shot.offset + (TRANSITION if shot.transition_in else 0.0)
+    offset = shot.offset + (tf / p.fps if shot.transition_in else 0.0)
     span = shot.frames + start_t0
     inputs = _input(shot, p, offset)
     graph = f"[0:v]{_stream(shot, p, start_t0, span, shot.frames)}[a]"
@@ -147,7 +159,7 @@ def shot_args(shot: Shot, nxt: Shot | None, p: FormatPreset, out: Path) -> list[
         inputs += _input(nxt, p, nxt.offset)
         nxt_span = nxt.frames + tf
         graph += (f";[1:v]{_stream(nxt, p, 0, nxt_span, tf)}[b]"
-                  f";[a][b]xfade=transition=fade:duration={TRANSITION}:offset={(shot.frames - tf) / p.fps:.3f}[v]")
+                  f";[a][b]xfade=transition=fade:duration={tf / p.fps:.4f}:offset={(shot.frames - tf) / p.fps:.3f}[v]")
     else:
         graph = graph.replace("[a]", "[v]")
     return [*inputs, "-filter_complex", graph, "-map", "[v]", "-frames:v", str(shot.frames), "-an",

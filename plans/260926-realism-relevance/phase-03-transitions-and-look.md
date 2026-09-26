@@ -1,7 +1,7 @@
 ---
 phase: 3
 title: Transitions And Look
-status: in-progress
+status: completed
 priority: P2
 effort: 2h
 dependencies: []

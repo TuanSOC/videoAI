@@ -35,8 +35,8 @@ survive → implement → full suite green (162 tests baseline). Tests never cal
 |-------|------|--------|
 | 1 | [Voice Pacing](./phase-01-voice-pacing.md) | Completed |
 | 2 | [Subtitle Chunks](./phase-02-subtitle-chunks.md) | Completed |
-| 3 | [Transitions And Look](./phase-03-transitions-and-look.md) | In Progress |
-| 4 | [Queries And Thumbnails](./phase-04-queries-and-thumbnails.md) | Pending |
+| 3 | [Transitions And Look](./phase-03-transitions-and-look.md) | Completed |
+| 4 | [Queries And Thumbnails](./phase-04-queries-and-thumbnails.md) | In Progress |
 | 5 | [Vision Judge](./phase-05-vision-judge.md) | Pending |
 | 6 | [Mood Music](./phase-06-mood-music.md) | Pending |
 | 7 | [Live Verification](./phase-07-live-verification.md) | Pending |

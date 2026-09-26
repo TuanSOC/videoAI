@@ -1,9 +1,9 @@
 ---
 phase: 4
-title: "Queries And Thumbnails"
-status: pending
+title: Queries And Thumbnails
+status: in-progress
 priority: P1
-effort: "3h"
+effort: 3h
 dependencies: []
 ---
 
