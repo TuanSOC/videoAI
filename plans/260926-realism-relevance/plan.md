@@ -3,7 +3,7 @@ title: 'Realism, relevance, light transitions, clean subtitles'
 description: >-
   Vision-judged clip choice (qwen2.5vl), tight voice pacing, cut+short-dissolve
   editing, 3-6 word one-line subtitles, mood music
-status: in-progress
+status: completed
 priority: P2
 branch: main
 tags:
@@ -39,7 +39,7 @@ survive → implement → full suite green (162 tests baseline). Tests never cal
 | 4 | [Queries And Thumbnails](./phase-04-queries-and-thumbnails.md) | Completed |
 | 5 | [Vision Judge](./phase-05-vision-judge.md) | Completed |
 | 6 | [Mood Music](./phase-06-mood-music.md) | Completed |
-| 7 | [Live Verification](./phase-07-live-verification.md) | In Progress |
+| 7 | [Live Verification](./phase-07-live-verification.md) | Completed |
 
 Order: 1→2→3 independent, cheap, visible wins. 4 → 5 (vision needs thumbs + query set). 6 independent.
 7 last.

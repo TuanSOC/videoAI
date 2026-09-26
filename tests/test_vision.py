@@ -30,19 +30,20 @@ def ollama(reply: dict | None = None, status=200, seen: list | None = None,
     return httpx.Client(transport=httpx.MockTransport(handler))
 
 
-def test_judge_sends_small_images_and_parses_scores():
+def test_judge_sends_one_numbered_strip_and_parses_scores():
     seen = []
     judge = vision.VisionJudge("http://ollama", "qwen2.5vl:7b", http=ollama({"scores": [8, 2]}, seen=seen))
-    assert judge.score("Hacker gửi email giả.", ["fake email on laptop"], [jpeg(), jpeg()]) == [8, 2]
+    assert judge.score("Hacker gửi email giả.", ["fake email on laptop"], [jpeg(), jpeg(720, 1280)]) == [8, 2]
     body = json.loads(seen[0].content)
     assert body["model"] == "qwen2.5vl:7b" and body["stream"] is False and "format" in body
     msg = body["messages"][0]
-    assert len(msg["images"]) == 2 and "Hacker gửi email giả." in msg["content"]
-    small = cv2.imdecode(np.frombuffer(base64.b64decode(msg["images"][0]), np.uint8), cv2.IMREAD_COLOR)
-    assert max(small.shape[:2]) <= vision.IMAGE_SIDE                     # thumbnails shrunk before sending
+    # one image: a strip of numbered tiles (~1.2k tokens for 5; separate images cost ~1.1k each)
+    assert len(msg["images"]) == 1 and "Hacker gửi email giả." in msg["content"] and "2 numbered" in msg["content"]
+    strip = cv2.imdecode(np.frombuffer(base64.b64decode(msg["images"][0]), np.uint8), cv2.IMREAD_COLOR)
+    assert strip.shape[:2] == (vision.TILE, 2 * vision.TILE)
 
 
-@pytest.mark.parametrize("reply", [{"scores": [8]}, {"scores": [11, 3]}, {"wrong": 1}])
+@pytest.mark.parametrize("reply", [{"scores": [8]}, {"scores": [11, 3]}, {"wrong": 1}])  # too few / out of range
 def test_judge_rejects_bad_answers(reply):
     judge = vision.VisionJudge("http://ollama", "m", http=ollama(reply))
     assert judge.score("n", ["q"], [jpeg(), jpeg()]) is None
@@ -58,8 +59,7 @@ def test_missing_model_disables_judge_once():
 def test_unload_posts_keep_alive_zero():
     seen = []
     vision.unload("http://ollama", "qwen3:8b", http=ollama({}, seen=seen))
-    body = json.loads(seen[0].content)
-    assert body == {"model": "qwen3:8b", "keep_alive": 0}
+    assert json.loads(seen[0].content) == {"model": "qwen3:8b", "keep_alive": 0}
 
 
 # --- selector integration -------------------------------------------------------------------------
@@ -243,7 +243,7 @@ def test_script_model_unloaded_once_before_first_judgement():
     judge.score("n", ["q"], [jpeg()])
     judge.score("n", ["q"], [jpeg()])
     paths = [r.url.path for r in seen]
-    assert paths == ["/api/generate", "/api/chat", "/api/chat"] and judge.used
+    assert paths == ["/api/generate", "/api/ps", "/api/chat", "/api/chat"] and judge.used
 
 
 def test_vision_session_unloads_only_if_used(monkeypatch, tmp_path):
@@ -270,3 +270,22 @@ def test_text_judge_kept_as_backup_when_vision_enabled(monkeypatch, tmp_path):
     monkeypatch.setattr("vidgen.visuals.comfy.ComfyClient.available", lambda self: False)
     selector_ = sel.build_selector(script, s.preset("short"), tmp_path, s)
     assert selector_.judge == "text-judge" and selector_.vision is not None
+
+
+def test_unload_waits_until_the_model_left_vram(monkeypatch):
+    # Ollama answers keep_alive:0 at once but frees VRAM later; loading the next model before that
+    # left it half on the CPU (seen live: 120 s timeouts)
+    ps = iter([{"models": [{"name": "qwen3:8b"}]}, {"models": [{"name": "qwen3:8b"}]}, {"models": []}])
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        return httpx.Response(200, json=next(ps) if request.url.path == "/api/ps" else {})
+    monkeypatch.setattr(vision.time, "sleep", lambda s: None)
+    vision.unload("http://ollama", "qwen3:8b", http=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert seen == ["/api/generate", "/api/ps", "/api/ps", "/api/ps"]
+
+
+def test_extra_scores_for_one_image_are_trimmed():
+    judge = vision.VisionJudge("http://ollama", "m", http=ollama({"scores": [7, 0, 0]}))
+    assert judge.score("n", ["q"], [jpeg()]) == [7]

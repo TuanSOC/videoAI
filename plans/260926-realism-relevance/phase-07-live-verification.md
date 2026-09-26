@@ -1,7 +1,7 @@
 ---
 phase: 7
 title: Live Verification
-status: in-progress
+status: completed
 priority: P1
 effort: 1.5h
 dependencies:
@@ -54,3 +54,16 @@ regression check; commit; restart server only when `/api/videos` shows no runnin
 Live-run fixes: adjectives excluded from subject, no unjudged strict picks after the judge answered,
 MIN_VISION 6 / MIN_FALLBACK 3 / 3 calls, quote-aware sentence ends, WPS vi 3.9 (en 3.0 unmeasured).
 Remaining: image steps can run out of judge calls (seen: letter-board image); acceptable, user can swap.
+
+### After code review + perf fixes (run -7, final)
+- Review fixes: rejected clips excluded per scene, weak clip deferred until image/AI steps fail, text judge kept
+  as backup, bad thumbnails not cached, comma query fix, judge gives up after 2 failures, lazy unload,
+  voice_rate validation, pyvi fallback, web tests isolated from Ollama.
+- Live regressions found and fixed: (1) Ollama evicts asynchronously → vision model loaded half on CPU,
+  120 s timeouts → unload now waits for /api/ps; (2) Ollama upscales small images (~1.1k tokens each) →
+  candidates sent as ONE numbered strip (~1.2k tokens total, num_ctx 4096, fully in VRAM, 0.6–2 s/call,
+  scored better than separate images); (3) pass mark 5 (prompt defines 5 as acceptable).
+- Final: total 203 s (baseline 105 s, +98 s ✅), visuals 79 s, scores [5,5,5,8,5,10,5,8,8], no junk clips,
+  gaps ≤0.33 s, captions within limits.
+- Known limits: 7B judge separates junk (0) from usable (5) well but ranks usable clips coarsely; script
+  length varies with the LLM (this run 9 scenes / 33 s; previous 52 s); en words-per-second unmeasured.
