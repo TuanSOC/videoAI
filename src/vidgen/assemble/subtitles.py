@@ -23,7 +23,8 @@ SENTENCE_PUNCT = (".", "!", "?", "…", ",", ";", ":")
 SHORT_MAX_WORDS = 6
 SHORT_MIN_WORDS = 3
 SHORT_IDEAL_WORDS = 4
-SHORT_MAX_CHARS = 26
+SHORT_MAX_CHARS = 26   # one line at the style's font size
+SHORT_HARD_CHARS = 30  # allowed (with a cost) when long words leave no better split; drawn smaller
 SENTENCE_END = (".", "!", "?", "…")
 LONG_MAX_WORDS = 12
 LONG_LINE_CHARS = 42
@@ -164,16 +165,16 @@ def _segments(words: list[WordTiming]) -> list[list[WordTiming]]:
 
 def _chunk_cost(chunk: list[WordTiming], closes_segment: bool) -> float:
     n, chars = len(chunk), len(" ".join(w.word for w in chunk))
-    if n > SHORT_MAX_WORDS or (chars > SHORT_MAX_CHARS and n > 1):
+    if n > SHORT_MAX_WORDS or (chars > SHORT_HARD_CHARS and n > 1):
         return float("inf")
-    cost = abs(n - SHORT_IDEAL_WORDS)
+    cost = abs(n - SHORT_IDEAL_WORDS) + 3 * max(0, chars - SHORT_MAX_CHARS)
     if n < SHORT_MIN_WORDS:
         # only when the sentence leaves no better split; a lone word is the worst (it flashes by)
-        cost += 10 + 6 * (SHORT_MIN_WORDS - n - 1)
+        cost += 6 if n == 2 else 16
     last = chunk[-1].word
     if not closes_segment:
         if _bare(last) in FUNCTION_WORDS or _is_number(last):
-            cost += 8  # "để" / "3" at a line end: the viewer waits for the rest
+            cost += 14  # "để" / "and" / "3" at a line end: the viewer waits for the rest
         if _ends(last, SENTENCE_PUNCT):
             cost -= 2  # a comma is a natural place to break
     return cost
@@ -181,7 +182,7 @@ def _chunk_cost(chunk: list[WordTiming], closes_segment: bool) -> float:
 
 def compound_pairs(script: Script) -> set[tuple[str, str]]:
     """Syllable pairs that form one Vietnamese word ("tài khoản", "mật khẩu"): Vietnamese writes compound
-    words with a space, so a phrase break must not fall between them. From a word segmenter (pyvi), plus
+    words with a space, so a phrase break must not fall between them. From a word segmenter (underthesea), plus
     pairs the narration keeps repeating (a topic word the segmenter doesn't know)."""
     if script.lang != "vi":
         return set()
@@ -201,21 +202,19 @@ def compound_pairs(script: Script) -> set[tuple[str, str]]:
             break
         for word in segmented.split():
             syllables = [_bare(s) for s in word.split("_")]
-            # pyvi sometimes merges two words ("thực_hiện_hành_động"); most Vietnamese words have two
-            # syllables, so glue pairwise and leave the boundary between pairs breakable
-            glue |= set(zip(syllables[::2], syllables[1::2]))
+            glue |= set(zip(syllables, syllables[1:]))
     return glue
 
 
 def _vi_tokenizer():
     try:
-        with warnings.catch_warnings():  # pyvi's regexes trigger SyntaxWarnings on first import
+        with warnings.catch_warnings():  # the segmenter's dependencies are noisy on first import
             warnings.simplefilter("ignore")
-            from pyvi import ViTokenizer
+            from underthesea import word_tokenize
     except Exception as e:  # not installed, or its model fails to load
         log.warning("Vietnamese word segmenter unavailable (%s): compound words may be split", e)
         return None
-    return ViTokenizer.tokenize
+    return lambda text: word_tokenize(text, format="text")
 
 
 def short_chunks(words: list[WordTiming], glue: set[tuple[str, str]] = frozenset()) -> list[list[WordTiming]]:
@@ -263,7 +262,7 @@ def _chunk_end(chunk: list[WordTiming], next_chunk: list[WordTiming] | None) -> 
     return chunk[-1].end + HOLD_AFTER
 
 
-def _events_short(chunks: list[list[WordTiming]]) -> list[tuple[float, float, str]]:
+def _events_short(chunks: list[list[WordTiming]], size: int) -> list[tuple[float, float, str]]:
     """One event per phrase; each word switches white→yellow when it is spoken (karaoke \\k)."""
     events = []
     for ci, chunk in enumerate(chunks):
@@ -272,7 +271,10 @@ def _events_short(chunks: list[list[WordTiming]]) -> list[tuple[float, float, st
         for k, w in enumerate(chunk):
             until = chunk[k + 1].start if k + 1 < len(chunk) else w.end
             parts.append(f"{{\\k{max(1, round((until - w.start) * 100))}}}{_escape(w.word)}")
-        events.append((chunk[0].start, end, " ".join(parts)))
+        chars = len(" ".join(w.word for w in chunk))
+        # a line longer than SHORT_MAX_CHARS (long words) is drawn smaller so it stays on one line
+        fit = f"{{\\fs{size * SHORT_MAX_CHARS // chars}}}" if chars > SHORT_MAX_CHARS else ""
+        events.append((chunk[0].start, end, fit + " ".join(parts)))
     return events
 
 
@@ -297,7 +299,7 @@ def build_ass(script: Script, timeline: Timeline, preset: FormatPreset) -> str:
     size, outline, shadow, margin_l, margin_r, margin_v = STYLES[fmt]
     words = display_words(script, timeline)
     if fmt == "short":
-        events = _events_short(short_chunks(words, compound_pairs(script)))
+        events = _events_short(short_chunks(words, compound_pairs(script)), size)
         primary, secondary = YELLOW, WHITE  # karaoke: unsung (secondary) → sung (primary)
     else:
         events = _events_long(chunk_words(words, LONG_MAX_WORDS, orphan_lookahead=2), emphasis_words(script))

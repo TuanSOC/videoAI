@@ -263,13 +263,13 @@ def test_short_chunks_are_3_to_6_words_within_26_chars():
     script = Script(title="t", hook="h", lang="vi", format="short", scenes=[
         Scene(id=1, narration="Đổi mật khẩu. Mật khẩu mạnh. Ba mật khẩu.", visual_query="q")])
     assert ("mật", "khẩu") in subs.compound_pairs(script) and ("khẩu", "mạnh") not in subs.compound_pairs(script)
-    # said once, still one word: a Vietnamese word segmenter knows "tài khoản", "địa chỉ"
+    # said once, still one word: a Vietnamese word segmenter knows "tài khoản", "địa chỉ", "mã độc"
     once = Script(title="t", hook="h", lang="vi", format="short", scenes=[
         Scene(id=1, narration="Hacker đánh cắp tài khoản và địa chỉ email.", visual_query="q")])
     assert {("tài", "khoản"), ("địa", "chỉ")} <= subs.compound_pairs(once)
     merged = Script(title="t", hook="h", lang="vi", format="short", scenes=[
         Scene(id=1, narration="Hacker thực hiện hành động trái phép.", visual_query="q")])
-    assert ("hiện", "hành") not in subs.compound_pairs(merged)   # two words pyvi merged stay breakable
+    assert ("hiện", "hành") not in subs.compound_pairs(merged)   # two words, breakable between them
     assert subs.compound_pairs(once.model_copy(update={"lang": "en"})) == set()
     for c in chunks[:-1]:
         assert 3 <= len(c) <= 6, c
@@ -372,4 +372,21 @@ def test_english_phrases_no_lone_words_or_dangling_conjunctions():
     ends = [subs._bare(c[-1]) for c in chunks if not subs._ends(c[-1], subs.SENTENCE_END)]
     # (", but" stays at a line end once: every other split of that sentence breaks the 26-char line)
     assert not {"until", "to", "or"} & set(ends) and ends.count("but") <= 1, chunks
-    assert all(len(" ".join(c)) <= 26 for c in chunks)
+    assert all(len(" ".join(c)) <= subs.SHORT_HARD_CHARS for c in chunks)
+
+
+def test_long_words_get_a_slightly_smaller_line_instead_of_a_lone_word():
+    for text in ("Attackers often use cryptocurrency like Bitcoin to obscure their identity.",
+                 "Offline backups and append-only permissions help protect against attacks."):
+        chunks = [[x.word for x in c] for c in subs.short_chunks(ws(*text.split()))]
+        assert all(len(c) >= 2 for c in chunks), chunks
+        assert all(len(" ".join(c)) <= subs.SHORT_HARD_CHARS for c in chunks)
+    script = Script(title="t", hook="h", lang="en", format="short", scenes=[
+        Scene(id=1, narration="Attackers often use cryptocurrency like Bitcoin to obscure their identity.",
+              visual_query="q")])
+    words = ws(*script.scenes[0].narration.split())
+    tl = Timeline(scenes=[SceneAudio(scene_id=1, path="a", start=0, duration=words[-1].end + .2, words=words)])
+    ass = subs.build_ass(script, tl, get_settings().preset("short"))
+    long_line = next(l for l in ass.splitlines() if "cryptocurrency" in l)
+    assert r"{\fs" in long_line                      # shrunk to stay on one line
+    assert r"{\fs" not in next(l for l in ass.splitlines() if "Attackers" in l and l.startswith("Dialogue"))
