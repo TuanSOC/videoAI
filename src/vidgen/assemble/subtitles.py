@@ -38,6 +38,8 @@ rất cũng này đó nào như từ vào ra lên xuống tại về theo bởi 
 lại rồi nữa luôn thêm vẫn đều hơn nhất quá đi
 the a an of to in on at by for with from and or but is are was were be been that this these those
 its their his her our your my as into than then so if when while which who whose
+until unless because since after before about over under through without within via per like
+not no nor yet can will would could should may might must has have had do does did
 """.split())
 
 STYLES = {
@@ -166,7 +168,8 @@ def _chunk_cost(chunk: list[WordTiming], closes_segment: bool) -> float:
         return float("inf")
     cost = abs(n - SHORT_IDEAL_WORDS)
     if n < SHORT_MIN_WORDS:
-        cost += 10  # only when the sentence leaves no better split
+        # only when the sentence leaves no better split; a lone word is the worst (it flashes by)
+        cost += 10 + 6 * (SHORT_MIN_WORDS - n - 1)
     last = chunk[-1].word
     if not closes_segment:
         if _bare(last) in FUNCTION_WORDS or _is_number(last):

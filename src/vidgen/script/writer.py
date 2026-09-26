@@ -19,9 +19,9 @@ log = logging.getLogger(__name__)
 PROMPTS = Path(__file__).parent / "prompts"
 LANG_NAMES = {"vi": "Vietnamese", "en": "English"}
 # Spoken rate of edge-tts neural voices; Vietnamese counts space-separated syllables.
-# spoken pace incl. pauses at voice_rate +8% with tight scene cuts: vi measured 3.98 w/s on a 33 s
-# short (was 3.23 before); en scaled by the same ratio, not yet measured
-WORDS_PER_SECOND = {"vi": 3.9, "en": 3.0}
+# spoken pace incl. pauses at voice_rate +8% with tight scene cuts, measured on shorts:
+# vi 3.98 w/s (was 3.23 before the pacing changes), en 2.53 w/s (AndrewMultilingual)
+WORDS_PER_SECOND = {"vi": 3.9, "en": 2.5}
 MAX_SCENE_WORDS = 25
 MIN_SCENE_WORDS = 5
 SECONDS_PER_CHAPTER = 90
