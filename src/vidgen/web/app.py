@@ -1,6 +1,7 @@
 """Local web UI: JSON API over the existing pipeline + static single-page frontend. Binds to 127.0.0.1 only."""
 
 import hashlib
+import logging
 import json
 import re
 import shutil
@@ -24,6 +25,7 @@ from vidgen.script.writer import WORDS_PER_SECOND
 from vidgen.web.jobs import JobBusyError, JobQueue, JobStatus, load_job, mark_interrupted
 
 STATIC = Path(__file__).parent / "static"
+log = logging.getLogger(__name__)
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,80}$")
 URL_KEYS = ("COMFYUI_URL", "OLLAMA_URL")
 
@@ -219,7 +221,17 @@ def create_app(settings: Callable[[], Settings] = get_settings,
             return []
         dirs = [d for d in r.iterdir() if d.is_dir() and SLUG_RE.match(d.name)
                 and ((d / "state.json").exists() or (d / "script.json").exists())]
-        return sorted((summary(d) for d in dirs), key=lambda v: v["updated"], reverse=True)
+        return sorted((safe_summary(d) for d in dirs), key=lambda v: v["updated"], reverse=True)
+
+    def safe_summary(d: Path) -> dict:
+        """One folder with a hand-broken file must not take the whole library down."""
+        try:
+            return summary(d)
+        except Exception as e:
+            log.warning("cannot read %s: %s", d.name, e)
+            return {"slug": d.name, "topic": d.name, "title": d.name, "format": "short", "lang": "vi",
+                    "scenes": 0, "status": "error", "stage": "", "job_kind": "", "error": str(e)[:300],
+                    "has_video": (d / "final.mp4").exists(), "updated": last_modified(d)}
 
     @app.post("/api/videos", status_code=201)
     def create_video(req: NewVideo) -> dict:

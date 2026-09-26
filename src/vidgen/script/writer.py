@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from vidgen.assemble.music import MOODS
 from vidgen.config import Format, FormatPreset, Lang
 from vidgen.models import Angle, Scene, Script, SourceRef, VisualType
-from vidgen.script.llm import LLMChain
+from vidgen.script.llm import LLMChain, LLMError
 from vidgen.script.research import Source, facts_block
 
 log = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ class Outline(BaseModel):
 
 
 class ChapterDraft(BaseModel):
-    scenes: list[LLMScene] = Field(min_length=2)
+    scenes: list[LLMScene] = Field(min_length=1)  # postprocess splits a long one; 2 made valid drafts fail
 
 
 def _render(name: str, **values) -> str:
@@ -186,10 +186,13 @@ def rewrite_one(script: Script, scene: Scene, prev: str, nxt: str, instruction: 
     out = llm.generate(prompt, LLMScene)
     got = len(out.narration.split())
     if got > limit:
-        retry = llm.generate(prompt + f"\n\nYour previous answer had {got} words: rewrite it with at most "
-                                      f"{limit} words, this scene's idea only.", LLMScene)
-        if len(retry.narration.split()) < got:
-            out = retry
+        try:
+            retry = llm.generate(prompt + f"\n\nYour previous answer had {got} words: rewrite it with at most "
+                                          f"{limit} words, this scene's idea only.", LLMScene)
+            if len(retry.narration.split()) < got:
+                out = retry
+        except Exception as e:  # the first answer is still usable
+            log.warning("shorter rewrite failed: %s", e)
     if not out.visual_query.isascii():  # seen live: a Vietnamese query, useless for stock search
         out = out.model_copy(update={"visual_query": scene.visual_query})
     return out.model_copy(update={"alt_queries": clean_alt_queries(out.visual_query, out.alt_queries)})
@@ -269,16 +272,22 @@ def _generate_long(topic, lang, preset, llm, seconds, words, ctx):
             note = "This is the final chapter: wrap up the story and end with a question inviting comments."
         else:
             note = "Continue smoothly from the previous chapter; no greetings or recaps."
-        draft = _generate_with_length(
-            llm,
-            _render("long_chapter.md", title=outline.title, **ctx, outline=outline_text, chapter_index=i,
-                    chapter_count=len(outline.chapters), chapter_title=ch.title,
-                    chapter_summary=ch.summary, position_note=note, lang_name=LANG_NAMES[lang],
-                    # spread the AI-video budget: one slot per chapter for the first N chapters
-                    target_words=per_chapter, max_ai_video=1 if i <= preset.max_ai_video else 0),
-            ChapterDraft, per_chapter, ctx, lang,
-        )
+        try:  # one chapter the model can't write must not lose the outline and every other chapter
+            draft = _generate_with_length(
+                llm,
+                _render("long_chapter.md", title=outline.title, **ctx, outline=outline_text, chapter_index=i,
+                        chapter_count=len(outline.chapters), chapter_title=ch.title,
+                        chapter_summary=ch.summary, position_note=note, lang_name=LANG_NAMES[lang],
+                        # spread the AI-video budget: one slot per chapter for the first N chapters
+                        target_words=per_chapter, max_ai_video=1 if i <= preset.max_ai_video else 0),
+                ChapterDraft, per_chapter, ctx, lang,
+            )
+        except Exception as e:
+            log.warning("chapter %d (%s) failed, skipping it: %s", i, ch.title, e)
+            continue
         scenes += [Scene(id=0, chapter=ch.title, **s.model_dump()) for s in draft.scenes]
+    if len(scenes) == 1:
+        raise LLMError("no chapter could be written")
     return outline.title, outline.hook, outline.mood, scenes
 
 

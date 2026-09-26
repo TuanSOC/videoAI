@@ -19,6 +19,7 @@ import httpx
 from pydantic import BaseModel
 
 from vidgen.config import FormatPreset, Settings
+from vidgen.fsutil import write_atomic
 from vidgen.models import Alternate, Asset, Scene, Script, Timeline
 from vidgen.visuals.stock import Candidate, Pexels, Pixabay, StockClient, download, url_suffix
 
@@ -280,7 +281,7 @@ class Selector:
                     try:
                         hits = client.videos(query, self.orientation) if kind == "video" \
                             else client.photos(query, self.orientation)
-                    except httpx.HTTPError as e:
+                    except (httpx.HTTPError, OSError, ValueError) as e:
                         log.warning("%s search failed for %r: %s", client.source, query, e)
                         continue
                     for c in hits:
@@ -382,7 +383,10 @@ class Selector:
         returned or cached: one HTML error page would make the judge refuse the whole batch."""
         path = self.cache_dir / "thumbs" / f"{hashlib.sha1(url.encode()).hexdigest()}.jpg"
         if path.exists():
-            return path.read_bytes()
+            data = path.read_bytes()
+            if is_image(data):
+                return data
+            path.unlink(missing_ok=True)  # cut short by a crash: fetch again
         try:
             resp = self.http.get(url, timeout=20)
             resp.raise_for_status()
@@ -393,7 +397,7 @@ class Selector:
             log.debug("thumbnail is not an image: %s", url)
             return None
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(resp.content)
+        write_atomic(path, resp.content)
         return resp.content
 
     def _use(self, scene: Scene, c: Candidate | Alternate, query: str,
@@ -411,7 +415,7 @@ class Selector:
             return asset
         try:
             self._fetch(c.download_url, dest)
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, OSError, ValueError) as e:
             log.warning("download failed %s: %s", c.download_url, e)
             return None
         return asset

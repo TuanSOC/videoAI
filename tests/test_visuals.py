@@ -55,23 +55,23 @@ def test_pixabay_skips_empty_variants(tmp_path):
 
 
 def test_replace_retries_on_windows_lock(tmp_path, monkeypatch):
-    from pathlib import Path
+    import os
 
-    from vidgen.visuals import stock
+    from vidgen import fsutil
 
     src, dest = tmp_path / "a.part", tmp_path / "a.mp4"
     src.write_bytes(b"x")
-    real, calls = Path.replace, []
+    real, calls = os.replace, []
 
-    def flaky(self, target):
+    def flaky(a, b):
         calls.append(1)
         if len(calls) < 3:
             raise PermissionError(32, "being used by another process")
-        return real(self, target)
+        return real(a, b)
 
-    monkeypatch.setattr(Path, "replace", flaky)
-    monkeypatch.setattr(stock.time, "sleep", lambda s: None)
-    stock._replace_with_retry(src, dest)
+    monkeypatch.setattr(fsutil.os, "replace", flaky)
+    monkeypatch.setattr(fsutil.time, "sleep", lambda s: None)
+    fsutil.replace_with_retry(src, dest)
     assert dest.read_bytes() == b"x" and len(calls) == 3
 
 

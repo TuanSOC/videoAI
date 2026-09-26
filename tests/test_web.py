@@ -512,3 +512,13 @@ def test_light_jobs_do_not_wait_behind_renders():
     finally:
         release.set()
         q.wait_idle()
+
+
+def test_one_broken_folder_does_not_hide_the_library(env):
+    client, jobs, _, s = env
+    good = create(client, jobs)
+    bad = create(client, jobs)
+    (s.pipeline.output_dir / bad / "script.json").write_text("{ hand-edited, broken", encoding="utf-8")
+    videos = {v["slug"]: v for v in client.get("/api/videos").json()}
+    assert videos[good]["status"] == "review"
+    assert videos[bad]["status"] == "error" and videos[bad]["error"]

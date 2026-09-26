@@ -13,14 +13,19 @@ def write_atomic(path: Path, data: str | bytes) -> None:
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data.encode("utf-8") if isinstance(data, str) else data)
-        for attempt in range(8):  # Windows: a reader or antivirus may hold the target briefly
-            try:
-                os.replace(tmp, path)
-                return
-            except PermissionError:
-                if attempt == 7:
-                    raise
-                time.sleep(0.05 * 2 ** attempt)
+        replace_with_retry(Path(tmp), path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+
+def replace_with_retry(src: Path, dest: Path, attempts: int = 8) -> None:
+    """os.replace; Windows antivirus or a reader briefly locks fresh files (WinError 32): wait it out."""
+    for attempt in range(attempts):
+        try:
+            os.replace(src, dest)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * 2 ** attempt)  # 0.05 s … 6.4 s total

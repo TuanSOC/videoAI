@@ -41,12 +41,20 @@ def fact_check(script: Script, sources: list[Source], llm: LLMChain) -> FactChec
         return FactCheck(checked=False)
     template = Template(PROMPT.read_text(encoding="utf-8"))
     found: list[Issue] = []
+    ok, error = 0, None
     # batches: a 100-scene long video in one prompt would overflow the 8k context
     for i in range(0, len(script.scenes), SCENES_PER_CHECK):
         batch = script.scenes[i:i + SCENES_PER_CHECK]
         prompt = template.substitute(facts=facts_block(sources), lang_name=LANG_NAMES[script.lang],
                                      scenes="\n".join(f"{s.id}. {s.narration}" for s in batch))
-        found += llm.generate(prompt, Issues).issues
+        try:  # one failed batch must not throw away what the others found
+            found += llm.generate(prompt, Issues).issues
+            ok += 1
+        except Exception as e:
+            log.warning("fact check of scenes %d-%d failed: %s", batch[0].id, batch[-1].id, e)
+            error = e
+    if not ok and error is not None:
+        raise error
     by_id = {s.id: s for s in script.scenes}
     # the model sometimes "reports" questions just to say they need no check (seen live): drop them
     return FactCheck(checked=True, issues=[

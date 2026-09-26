@@ -11,7 +11,7 @@ from vidgen.assemble import sfx as sound
 from vidgen.assemble.music import music_start, pick_music, track_credit
 from vidgen.assemble.subtitles import build_ass
 from vidgen.config import ROOT, FormatPreset
-from vidgen.fsutil import write_atomic
+from vidgen.fsutil import replace_with_retry, write_atomic
 from vidgen.models import Asset, Script, Timeline
 
 log = logging.getLogger(__name__)
@@ -20,6 +20,7 @@ MUSIC_DIR = ROOT / "assets" / "music"
 MUSIC_FILE = "music.json"  # track used by the render + its credit line, for the video description
 SFX_DIR = ROOT / "assets" / "sfx"
 SFX_FILE = "sfx.json"      # the cues the render placed, for inspection
+PART_FILE = "final.part.mp4"  # the encode in progress
 MUSIC_UNDER_VOICE_DB = 18  # music sits this far below the voice's mean level...
 FALLBACK_MUSIC_DB = -9.1   # ...or at the old fixed 0.35 gain when a level can't be measured
 LOUDNESS = "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000"  # -14 LUFS: YouTube/TikTok target
@@ -62,7 +63,8 @@ def audio_filter(has_music: bool, duration: float = 0.0, music_db: float = FALLB
 
 
 def final_args(duration: float, music: Path | None, music_start: float = 0.0,
-               music_gain_db: float = FALLBACK_MUSIC_DB, sfx: Path | None = None) -> list[str]:
+               music_gain_db: float = FALLBACK_MUSIC_DB, sfx: Path | None = None,
+               out: str = "final.mp4") -> list[str]:
     """Paths are relative to the output dir (run with cwd there) to avoid Windows ':' escaping in filters."""
     inputs = ["-f", "concat", "-safe", "0", "-i", "segments/list.txt", "-i", "voice.wav"]
     if music:
@@ -77,7 +79,7 @@ def final_args(duration: float, music: Path | None, music_start: float = 0.0,
             "-filter_complex", audio_filter(music is not None, duration, music_gain_db, sfx_input),
             "-map", "[v]", "-map", "[a]",
             *ffmpeg.video_encoder(), "-c:a", "aac", "-b:a", "192k",
-            "-t", f"{duration:.3f}", "-movflags", "+faststart", "final.mp4"]
+            "-t", f"{duration:.3f}", "-movflags", "+faststart", out]
 
 
 def render_video(script: Script, timeline: Timeline, assets: list[Asset], preset: FormatPreset,
@@ -105,8 +107,15 @@ def render_video(script: Script, timeline: Timeline, assets: list[Asset], preset
         sfx_track = sound.build_sfx_track(cues, sound.ensure_library(SFX_DIR), timeline.duration,
                                           out_dir / "sfx.wav")
     write_atomic(out_dir / SFX_FILE, json.dumps([c.__dict__ for c in cues], indent=1))
-    ffmpeg.run(final_args(timeline.duration, music, start, gain, Path(sfx_track.name) if sfx_track else None),
-               cwd=out_dir)
-    write_atomic(out_dir / MUSIC_FILE, json.dumps(
-        {"track": music.name if music else "", "credit": track_credit(music) if music else ""}, ensure_ascii=False))
+    # final.mp4 existing means "render done": encode beside it and move it in only when complete
+    part = out_dir / PART_FILE
+    try:
+        ffmpeg.run(final_args(timeline.duration, music, start, gain,
+                              Path(sfx_track.name) if sfx_track else None, out=PART_FILE), cwd=out_dir)
+        write_atomic(out_dir / MUSIC_FILE, json.dumps(
+            {"track": music.name if music else "", "credit": track_credit(music) if music else ""},
+            ensure_ascii=False))
+        replace_with_retry(part, out_dir / "final.mp4")
+    finally:
+        part.unlink(missing_ok=True)
     return out_dir / "final.mp4"

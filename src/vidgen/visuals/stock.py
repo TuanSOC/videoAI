@@ -4,11 +4,16 @@
 import hashlib
 import json
 import logging
+import os
+import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
+
+from vidgen.fsutil import replace_with_retry, write_atomic
 
 log = logging.getLogger(__name__)
 PER_PAGE = 30  # a video about one subject needs many distinct clips of it
@@ -47,22 +52,30 @@ class StockClient:
         self.http = http or httpx.Client(timeout=30, follow_redirects=True)
 
     def _get(self, url: str, params: dict, headers: dict | None = None) -> dict:
+        """JSON search reply, cached. Every failure surfaces as an httpx.HTTPError (the selector's
+        "this search failed, try the next" signal) — a bad reply must not end the visuals stage."""
         key = hashlib.sha1(json.dumps([self.source, url, params], sort_keys=True).encode()).hexdigest()
         cached = self.cache_dir / f"{key}.json"
         if cached.exists():
-            return json.loads(cached.read_text(encoding="utf-8"))
+            try:
+                return json.loads(cached.read_text(encoding="utf-8"))
+            except ValueError:  # cut short by a crash: fetch again
+                cached.unlink(missing_ok=True)
         for attempt in range(2):
             resp = self.http.get(url, params=params, headers=headers)
             if resp.status_code == 429 and attempt == 0:
-                wait = min(int(resp.headers.get("Retry-After", "30")), 60)
+                wait = retry_after(resp.headers.get("Retry-After"), default=30, cap=60)
                 log.warning("%s rate limited, waiting %ss", self.source, wait)
                 time.sleep(wait)
                 continue
             resp.raise_for_status()
             break
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError as e:  # a proxy or captive portal answering with HTML
+            raise httpx.DecodingError(f"{self.source}: reply is not JSON", request=resp.request) from e
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        cached.write_text(json.dumps(data), encoding="utf-8")
+        write_atomic(cached, json.dumps(data))
         return data
 
     def videos(self, query: str, orientation: str) -> list[Candidate]:
@@ -92,26 +105,25 @@ class Pexels(StockClient):
         data = self._get("https://api.pexels.com/videos/search",
                          {"query": query, "orientation": orientation, "per_page": PER_PAGE},
                          self._headers())
-        out = []
-        for v in data.get("videos", []):
+
+        def build(v: dict) -> Candidate | None:
             f = pick_file([x for x in v.get("video_files", []) if x.get("file_type") == "video/mp4"])
-            if f:
-                out.append(Candidate(f"pexels:v{v['id']}", "video", f["link"], v.get("url", ""),
-                                     f["width"] or v["width"], f["height"] or v["height"],
-                                     float(v.get("duration") or 0), v.get("user", {}).get("name", ""),
-                                     self.source, self.license, slug_text(v.get("url", "")),
-                                     v.get("image", "")))
-        return out
+            if not f:
+                return None
+            return Candidate(f"pexels:v{v['id']}", "video", f["link"], v.get("url", ""),
+                             f.get("width") or v["width"], f.get("height") or v["height"],
+                             float(v.get("duration") or 0), (v.get("user") or {}).get("name", ""),
+                             self.source, self.license, slug_text(v.get("url", "")), v.get("image", ""))
+        return _hits(data.get("videos"), build, self.source)
 
     def photos(self, query, orientation):
         data = self._get("https://api.pexels.com/v1/search",
                          {"query": query, "orientation": orientation, "per_page": PER_PAGE},
                          self._headers())
-        return [Candidate(f"pexels:p{p['id']}", "image", p["src"]["large2x"], p.get("url", ""),
-                          p["width"], p["height"], 0.0, p.get("photographer", ""), self.source, self.license,
-                          f'{p.get("alt") or ""} {slug_text(p.get("url", ""))}'.strip(),
-                          p.get("src", {}).get("medium", ""))
-                for p in data.get("photos", [])]
+        return _hits(data.get("photos"), lambda p: Candidate(
+            f"pexels:p{p['id']}", "image", p["src"]["large2x"], p.get("url", ""), p["width"], p["height"], 0.0,
+            p.get("photographer", ""), self.source, self.license,
+            f'{p.get("alt") or ""} {slug_text(p.get("url", ""))}'.strip(), p["src"].get("medium", "")), self.source)
 
 
 class Pixabay(StockClient):
@@ -121,25 +133,25 @@ class Pixabay(StockClient):
     def videos(self, query, orientation):
         data = self._get("https://pixabay.com/api/videos/",
                          {"key": self.api_key, "q": query[:100], "per_page": PER_PAGE, "safesearch": "true"})
-        out = []
-        for h in data.get("hits", []):
-            f = pick_file(list(h.get("videos", {}).values()))
-            if f:
-                out.append(Candidate(f"pixabay:v{h['id']}", "video", f["url"], h.get("pageURL", ""),
-                                     f["width"], f["height"], float(h.get("duration") or 0),
-                                     h.get("user", ""), self.source, self.license, h.get("tags", ""),
-                                     _pixabay_thumb(h)))
-        return out
+
+        def build(h: dict) -> Candidate | None:
+            f = pick_file(list((h.get("videos") or {}).values()))
+            if not f:
+                return None
+            return Candidate(f"pixabay:v{h['id']}", "video", f["url"], h.get("pageURL", ""),
+                             f.get("width") or 0, f.get("height") or 0, float(h.get("duration") or 0),
+                             h.get("user", ""), self.source, self.license, h.get("tags", ""), _pixabay_thumb(h))
+        return _hits(data.get("hits"), build, self.source)
 
     def photos(self, query, orientation):
         data = self._get("https://pixabay.com/api/",
                          {"key": self.api_key, "q": query[:100], "per_page": PER_PAGE, "image_type": "photo",
                           "orientation": "vertical" if orientation == "portrait" else "horizontal",
                           "safesearch": "true"})
-        return [Candidate(f"pixabay:p{h['id']}", "image", h["largeImageURL"], h.get("pageURL", ""),
-                          h.get("imageWidth", 0), h.get("imageHeight", 0), 0.0, h.get("user", ""),
-                          self.source, self.license, h.get("tags", ""), h.get("webformatURL", ""))
-                for h in data.get("hits", [])]
+        return _hits(data.get("hits"), lambda h: Candidate(
+            f"pixabay:p{h['id']}", "image", h["largeImageURL"], h.get("pageURL", ""), h.get("imageWidth", 0),
+            h.get("imageHeight", 0), 0.0, h.get("user", ""), self.source, self.license, h.get("tags", ""),
+            h.get("webformatURL", "")), self.source)
 
 
 def _pixabay_thumb(hit: dict) -> str:
@@ -149,6 +161,28 @@ def _pixabay_thumb(hit: dict) -> str:
             return v["thumbnail"]
     pid = hit.get("picture_id")
     return f"https://i.vimeocdn.com/video/{pid}_640x360.jpg" if pid else ""
+
+
+def retry_after(value: str | None, default: float, cap: float) -> float:
+    """Seconds from a Retry-After header, which may be a number or an HTTP date (then: default)."""
+    try:
+        return min(float(value), cap) if value else default
+    except ValueError:
+        return default
+
+
+def _hits(items: list, build: Callable[[dict], "Candidate | None"], source: str) -> list[Candidate]:
+    """Candidates from API hits; a hit missing a field is skipped, not fatal."""
+    out = []
+    for item in items or []:
+        try:
+            c = build(item)
+        except (KeyError, TypeError, ValueError) as e:
+            log.debug("%s: skipping malformed hit (%s)", source, e)
+            continue
+        if c is not None:
+            out.append(c)
+    return out
 
 
 def url_suffix(url: str) -> str:
@@ -162,23 +196,20 @@ def download(url: str, cache_dir: Path, http: httpx.Client) -> Path:
     if dest.exists():
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    with http.stream("GET", url) as resp:
-        resp.raise_for_status()
-        with tmp.open("wb") as fh:
-            for chunk in resp.iter_bytes(1 << 16):
-                fh.write(chunk)
-    _replace_with_retry(tmp, dest)
-    return dest
-
-
-def _replace_with_retry(src: Path, dest: Path, attempts: int = 8) -> None:
-    """Windows antivirus briefly locks freshly written files (WinError 32); wait it out."""
-    for attempt in range(attempts):
+    # a temp name of its own: two jobs (or a swap and a job) may fetch the same clip at once
+    fd, name = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".part")
+    tmp = Path(name)
+    try:
+        with http.stream("GET", url) as resp:
+            resp.raise_for_status()
+            with os.fdopen(fd, "wb") as fh:
+                for chunk in resp.iter_bytes(1 << 16):
+                    fh.write(chunk)
         try:
-            src.replace(dest)
-            return
+            replace_with_retry(tmp, dest)
         except PermissionError:
-            if attempt == attempts - 1:
+            if not dest.exists():  # the other download holds it: theirs is the same file
                 raise
-            time.sleep(0.1 * 2 ** attempt)  # 0.1s … 12.8s total
+    finally:
+        tmp.unlink(missing_ok=True)
+    return dest

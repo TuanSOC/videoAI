@@ -138,7 +138,10 @@ class Wikipedia:
             key = hashlib.sha1(json.dumps([lang, params], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
             cached = self.cache_dir / f"{key}.json"
             if cached.exists():
-                return json.loads(cached.read_text(encoding="utf-8"))
+                try:
+                    return json.loads(cached.read_text(encoding="utf-8"))
+                except ValueError:
+                    cached.unlink(missing_ok=True)
         for attempt in range(RATE_LIMIT_RETRIES + 1):
             resp = self.http.get(f"https://{lang}.wikipedia.org/w/api.php", params=params)
             if resp.status_code != 429 or attempt == RATE_LIMIT_RETRIES:
@@ -151,7 +154,7 @@ class Wikipedia:
             self.sleep(wait)
         resp.raise_for_status()
         data = resp.json()
-        if cached is not None:
+        if cached is not None and "error" not in data:  # an API error must not be served forever
             cached.parent.mkdir(parents=True, exist_ok=True)
             write_atomic(cached, json.dumps(data, ensure_ascii=False))
         return data

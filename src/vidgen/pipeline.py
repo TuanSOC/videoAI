@@ -49,10 +49,11 @@ class Job:
 
 
 # --- stage bodies (imports are lazy so `doctor`/`--help` stay fast) ---------------------
-def _script(job: Job, fmt: str = "short", lang: str = "vi") -> None:
+def _script(job: Job, fmt: str = "short", lang: str = "vi"):
+    """Generate a script (not written yet) and the sources it was grounded in."""
+    from vidgen.script import writer
     from vidgen.script.llm import default_chain
     from vidgen.script.research import research
-    from vidgen.script.writer import generate
 
     s = job.settings
     llm = default_chain(s)
@@ -62,13 +63,15 @@ def _script(job: Job, fmt: str = "short", lang: str = "vi") -> None:
         sources = brief.chosen_sources()
     else:  # no brief (CLI legacy / older videos): research straight from the topic
         sources = research(job.topic, lang, llm) if s.pipeline.research else []
+    return writer.generate(job.topic, fmt, lang, s.preset(fmt), llm, sources, angle), sources
+
+
+def _write_sources(out_dir: Path, sources) -> None:
     if sources:  # kept for the reviewer: what the script's facts are supposed to come from
-        write_atomic(job.out_dir / "sources.md", "\n\n---\n\n".join(
+        write_atomic(out_dir / "sources.md", "\n\n---\n\n".join(
             f"# {src.title}\n{src.url}\n\n{src.text}" for src in sources))
     else:
-        (job.out_dir / "sources.md").unlink(missing_ok=True)
-    script = generate(job.topic, fmt, lang, s.preset(fmt), llm, sources, angle)
-    write_atomic(job.out_dir / "script.json", script.model_dump_json(indent=2))
+        (out_dir / "sources.md").unlink(missing_ok=True)
 
 
 def _voice(job: Job) -> None:
@@ -182,13 +185,39 @@ def init_video(topic: str, fmt: str, lang: str, s: Settings) -> Path:
 
 def write_script(out_dir: Path, s: Settings) -> None:
     """(Re)generate script.json from the topic/format/lang recorded by init_video.
-    Everything built from a previous script (voice, clips, video, metadata) is dropped first:
-    the new hash is recorded below, so run_stages could not detect the change on its own."""
-    invalidate_from(out_dir, "voice")
+    The new script is generated first; only then is everything built from the old one (voice, clips,
+    video, metadata) dropped — the new hash is recorded below, so run_stages could not detect the
+    change on its own. If generation fails, the finished video and the angle its facts came from are
+    left exactly as they were."""
     state = _load_state(out_dir)
     t = time.time()
-    _script(Job(out_dir, s, state["topic"]), state["format"], state["lang"])
+    try:
+        script, sources = _script(Job(out_dir, s, state["topic"]), state["format"], state["lang"])
+    except Exception:
+        _keep_script_angle(out_dir)
+        raise
+    invalidate_from(out_dir, "voice")
+    _write_sources(out_dir, sources)
+    write_atomic(out_dir / "script.json", script.model_dump_json(indent=2))
+    _record_script_angle(out_dir)
     _replace_script_done(out_dir, s, state, t)
+
+
+def _record_script_angle(out_dir: Path) -> None:
+    """Remember the angle (with its ticked sources) the script now on disk was written from."""
+    brief = load_brief(out_dir)
+    if brief is not None and brief.chosen is not None:
+        brief.script_angle = brief.angles[brief.chosen].model_copy(update={"sources": brief.chosen_sources()})
+        write_atomic(out_dir / BRIEF_FILE, brief.model_dump_json(indent=2))
+
+
+def _keep_script_angle(out_dir: Path) -> None:
+    """A newly picked angle failed to produce a script: point fact-check/extend/rewrite back at the
+    angle the existing script was written from."""
+    brief = load_brief(out_dir)
+    if brief is not None and brief.script_angle is not None and (out_dir / "script.json").exists():
+        brief.chosen = None
+        write_atomic(out_dir / BRIEF_FILE, brief.model_dump_json(indent=2))
 
 
 def _replace_script_done(out_dir: Path, s: Settings, state: dict, started: float) -> None:
@@ -390,6 +419,7 @@ def run_stages(out_dir: Path, s: Settings, force: str | None = None,
         log.info("script.json edited → regenerating %s", ", ".join(cleared) or "nothing")
         on_stage("script", "edited → downstream reset")
     state["script_hash"] = current_hash
+    _save_state(out_dir, state)  # also when every stage is skipped (old folders had no hash)
     if force:
         invalidate_from(out_dir, force)
 
