@@ -51,16 +51,17 @@ def test_chunk_breaks_on_max_punct_and_pause():
     assert [[x.word for x in c] for c in chunks] == [["a", "b."], ["c", "d", "e"], ["f"], ["g"]]
 
 
-def test_short_ass_karaoke_one_event_per_chunk_with_pop():
+def test_short_ass_one_line_word_highlight_without_effects():
     script, tl = make("short")
     ass = subs.build_ass(script, tl, get_settings().preset("short"))
     dialogues = [l for l in ass.splitlines() if l.startswith("Dialogue")]
-    # "Bí ẩn tam giác." stays whole (no lone "giác." before the full stop)
-    assert len(dialogues) == 3 and "giác." in dialogues[0] and "Bí" in dialogues[0]
-    assert all(subs.POP in d for d in dialogues)
-    assert dialogues[0].count(r"\kf") == 4                  # every word fills over its own duration
-    assert r"{\kf20}Bí" in dialogues[0]                     # 0.1 → 0.3 s = 20 cs
-    assert "PlayResY: 1920" in ass and ",110,210,620," in ass  # safe-zone margins
+    # "Bí ẩn tam giác." is one clean phrase, "Sự thật đơn giản" another
+    assert len(dialogues) == 2 and "giác." in dialogues[0] and "Bí" in dialogues[0]
+    assert dialogues[0].count(r"{\k") == 4 and r"\kf" not in ass  # spoken word turns yellow at once
+    assert r"{\k20}Bí" in dialogues[0]                            # 0.1 → 0.3 s = 20 cs
+    assert r"\t(" not in ass and r"\fscx" not in ass             # no pop-in, no zoomed keywords
+    assert r"\N" not in ass                                      # one line
+    assert "PlayResY: 1920" in ass and ",110,210,620," in ass    # safe-zone margins
 
 
 def test_long_ass_one_event_per_chunk():
@@ -227,9 +228,35 @@ def test_short_emphasis_markup_and_long_highlight():
     tl = Timeline(scenes=[SceneAudio(scene_id=1, path="a", start=0, duration=1,
                                      words=[w("Có", 0, .2), w("3", .2, .4), w("tim", .4, .6)])])
     ass = subs.build_ass(script, tl, get_settings().preset("short"))
-    assert subs.EMPHASIS_ON + "3" + subs.EMPHASIS_OFF in ass
+    assert r"\2c" not in ass and r"\fscx" not in ass           # short: plain words, no keyword styling
     long_ass = subs.build_ass(script.model_copy(update={"format": "long"}), tl, get_settings().preset("long"))
     assert subs.HIGHLIGHT + "3" in long_ass
+
+
+def test_short_chunks_are_3_to_6_words_within_26_chars():
+    text = ("Hacker tạo email giả mạo để gửi link hoặc file đính kèm chứa mã độc. "
+            "Phishing là kỹ thuật lừa đảo giả mạo để lấy thông tin nhạy cảm. Cẩn thận.")
+    chunks = [[x.word for x in c] for c in subs.short_chunks(ws(*text.split()))]
+    assert chunks[-1] == ["Cẩn", "thận."]                       # a 2-word sentence stays whole
+    # compound words repeated in the script ("mật khẩu") are never split across two phrases
+    words = ws(*"Hãy kiểm tra kỹ trước khi nhập mật khẩu vào bất kỳ trang nào.".split())
+    glued = [[x.word for x in c] for c in subs.short_chunks(words, glue={("mật", "khẩu")})]
+    assert not any(c[-1] == "mật" for c in glued), glued
+    script = Script(title="t", hook="h", lang="vi", format="short", scenes=[
+        Scene(id=1, narration="Đổi mật khẩu. Mật khẩu mạnh. Ba mật khẩu.", visual_query="q")])
+    assert ("mật", "khẩu") in subs.compound_pairs(script) and ("khẩu", "mạnh") not in subs.compound_pairs(script)
+    # said once, still one word: a Vietnamese word segmenter knows "tài khoản", "địa chỉ"
+    once = Script(title="t", hook="h", lang="vi", format="short", scenes=[
+        Scene(id=1, narration="Hacker đánh cắp tài khoản và địa chỉ email.", visual_query="q")])
+    assert {("tài", "khoản"), ("địa", "chỉ")} <= subs.compound_pairs(once)
+    merged = Script(title="t", hook="h", lang="vi", format="short", scenes=[
+        Scene(id=1, narration="Hacker thực hiện hành động trái phép.", visual_query="q")])
+    assert ("hiện", "hành") not in subs.compound_pairs(merged)   # two words pyvi merged stay breakable
+    assert subs.compound_pairs(once.model_copy(update={"lang": "en"})) == set()
+    for c in chunks[:-1]:
+        assert 3 <= len(c) <= 6, c
+        assert len(" ".join(c)) <= 26, c
+        assert subs._bare(c[-1]) not in subs.FUNCTION_WORDS, c
 
 
 def test_normalize_hashtags():

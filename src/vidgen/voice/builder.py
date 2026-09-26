@@ -2,7 +2,8 @@
 
 Scenes are voiced in groups (one TTS request per ~60 words, 4 in parallel): one request per scene
 was 3-4x slower and bursts of small requests got throttled. Word boundaries are matched back to their
-scenes and each group's audio is cut at the middle of the pause between scenes. If a group's words
+scenes and each group's audio is cut tight to the speech: a little before the first word and after
+the last one, so the TTS's long sentence pauses don't pile up into 1s+ silences between scenes. If a group's words
 can't be matched (unusual tokenisation), that group falls back to one request per scene.
 
 Every scene ends up as a padded PCM WAV measured sample-exactly, so caption timing cannot drift
@@ -10,6 +11,7 @@ across 100+ scenes the way summed MP3 estimates would.
 """
 
 import asyncio
+import functools
 import logging
 import unicodedata
 from collections.abc import Awaitable, Callable
@@ -26,7 +28,9 @@ from vidgen.voice.tts import TTSError, synth_edge
 
 log = logging.getLogger(__name__)
 WORDS = TypeAdapter(list[WordTiming])
-GAP_SECONDS = 0.15
+GAP_SECONDS = 0.05   # pad after each scene (on top of TAIL)
+LEAD = 0.08          # silence kept before a scene's first word
+TAIL = 0.2           # ... and after its last word (word ends are reported a little early)
 SAMPLE_RATE = 24000
 MAX_GROUP_WORDS = 60   # a short (~160 words) → 3-4 parallel requests
 GROUP_CONCURRENCY = 4  # measured: 4 concurrent grouped requests, no throttling (per-scene bursts were)
@@ -52,9 +56,20 @@ def _bare(token: str) -> str:
     return "".join(ch for ch in unicodedata.normalize("NFC", token.casefold()) if ch.isalnum())
 
 
-def cut_point(prev_end: float, next_start: float) -> float:
-    """Middle of the pause between two scenes; if the words overlap, never cut into the last word."""
-    return (prev_end + next_start) / 2 if next_start >= prev_end else prev_end
+def scene_bounds(prev_end: float, next_start: float) -> tuple[float, float]:
+    """(end of the previous scene, start of the next) inside the pause between them: at most TAIL after
+    the last word and LEAD before the next one; a short pause is cut in the middle; words that overlap
+    are never cut into."""
+    mid = (prev_end + next_start) / 2 if next_start >= prev_end else prev_end
+    return min(mid, prev_end + TAIL), max(mid, next_start - LEAD)
+
+
+def _piece(src: Path, words: list[WordTiming], start: float | None = None, end: float | None = None) -> "Piece":
+    """Speech span of one scene; start/end default to LEAD/TAIL around its words."""
+    if not words:
+        return Piece(src, 0.0, None, words)
+    return Piece(src, max(0.0, words[0].start - LEAD) if start is None else start,
+                 words[-1].end + TAIL if end is None else end, words)
 
 
 def plan_groups(scenes: list[Scene], max_words: int = MAX_GROUP_WORDS) -> list[list[Scene]]:
@@ -148,9 +163,9 @@ async def _voice_group(group: list[Scene], voice: str, voice_dir: Path, synth: S
                 log.info("%s: word boundaries didn't line up, voicing scene by scene", label)
         if split is not None:
             for k, (sc, ws) in enumerate(zip(todo, split)):
-                start = 0.0 if k == 0 else cut_point(split[k - 1][-1].end, ws[0].start)
-                end = cut_point(ws[-1].end, split[k + 1][0].start) if k + 1 < len(todo) else None
-                await asyncio.to_thread(_save_scene, voice_dir, sc, Piece(mp3, start, end, ws))
+                start = scene_bounds(split[k - 1][-1].end, ws[0].start)[1] if k else None
+                end = scene_bounds(ws[-1].end, split[k + 1][0].start)[0] if k + 1 < len(todo) else None
+                await asyncio.to_thread(_save_scene, voice_dir, sc, _piece(mp3, ws, start, end))
             return
         for sc in todo:
             mp3 = voice_dir / f"scene_{sc.id:03d}.mp3"
@@ -158,7 +173,7 @@ async def _voice_group(group: list[Scene], voice: str, voice_dir: Path, synth: S
                 words = await synth(sc.narration, voice, mp3)
             except TTSError as e:
                 raise TTSError(f"scene {sc.id}: {e}") from e
-            await asyncio.to_thread(_save_scene, voice_dir, sc, Piece(mp3, 0.0, None, words))
+            await asyncio.to_thread(_save_scene, voice_dir, sc, _piece(mp3, words))
 
 
 async def _voice_all(script: Script, voice: str, voice_dir: Path, synth: Synth) -> None:
@@ -176,11 +191,12 @@ def _default_aligner(s: Settings) -> Aligner:
 
 
 def generate_voice(script: Script, out_dir: Path, s: Settings,
-                   synth: Synth = synth_edge, aligner: Aligner | None = None) -> Timeline:
+                   synth: Synth | None = None, aligner: Aligner | None = None) -> Timeline:
     voice_dir = out_dir / "voice"
     voice_dir.mkdir(parents=True, exist_ok=True)
     voice = s.pipeline.voices[script.lang]
     aligner = aligner or _default_aligner(s)
+    synth = synth or functools.partial(synth_edge, rate=s.pipeline.voice_rate)
 
     asyncio.run(_voice_all(script, voice, voice_dir, synth))
 

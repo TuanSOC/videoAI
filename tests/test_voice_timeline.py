@@ -1,3 +1,4 @@
+import asyncio
 import shutil
 
 import pytest
@@ -91,9 +92,10 @@ def test_generate_voice_with_fake_tts(tmp_path):
     tl = generate_voice(script, tmp_path, get_settings(), synth=fake_synth, aligner=lambda p, l: [])
 
     assert (tmp_path / "voice.wav").exists() and (tmp_path / "timeline.json").exists()
-    assert tl.scenes[0].duration == pytest.approx(1 + GAP_SECONDS, abs=0.06)
+    # trimmed to the speech: 0.08s before the word (0.1) … 0.2s after it (0.5), not the whole 1s file
+    assert tl.scenes[0].duration == pytest.approx(0.68 + GAP_SECONDS, abs=0.06)
     assert ffmpeg.duration(tmp_path / "voice.wav") == pytest.approx(tl.duration, abs=0.01)
-    assert tl.scenes[1].words[0].start == pytest.approx(tl.scenes[1].start + 0.1)
+    assert tl.scenes[1].words[0].start == pytest.approx(tl.scenes[1].start + 0.08, abs=0.01)
 
 
 # --- grouped voicing ------------------------------------------------------------------------------
@@ -144,16 +146,42 @@ def test_grouped_voice_one_request_cut_at_pauses(tmp_path):
     assert calls == ["one two. three four five. six."]  # a single request for all three scenes
     s1, s2, s3 = tl.scenes
     assert [x.word for x in s2.words] == ["three", "four", "five"]
-    # scene 1 is cut halfway through the pause between "two" (ends 1.1) and "three" (starts 1.9)
-    assert s1.duration == pytest.approx(1.5 + GAP_SECONDS, abs=0.06)
-    assert s2.words[0].start == pytest.approx(s2.start + (1.9 - 1.5), abs=0.06)
+    # tight to the speech: scene 1 runs 0.02 (0.08 before "one") → 1.3 (0.2 after "two"),
+    # scene 2 starts 0.08 before "three" — the rest of the 0.8s pause is dropped
+    assert s1.duration == pytest.approx(1.28 + GAP_SECONDS, abs=0.06)
+    assert s2.words[0].start == pytest.approx(s2.start + 0.08, abs=0.06)
+    gap = s2.words[0].start - s1.words[-1].end
+    assert gap < 0.4
     assert ffmpeg.duration(tmp_path / "voice.wav") == pytest.approx(tl.duration, abs=0.02)
 
 
-def test_cut_point_never_cuts_into_an_overlapping_word():
-    from vidgen.voice.builder import cut_point
-    assert cut_point(1.0, 2.0) == 1.5
-    assert cut_point(2.1, 2.0) == 2.1
+def test_scene_bounds_keep_little_silence_and_never_cut_a_word():
+    from vidgen.voice.builder import scene_bounds
+    assert scene_bounds(1.0, 2.2) == pytest.approx((1.2, 2.12))   # long pause: 0.2 after, 0.08 before
+    assert scene_bounds(1.0, 1.1) == pytest.approx((1.05, 1.05))  # short pause: cut in the middle
+    assert scene_bounds(2.1, 2.0) == pytest.approx((2.1, 2.1))    # overlapping words: after the last one
+
+
+def test_synth_edge_passes_speaking_rate(monkeypatch, tmp_path):
+    from vidgen.voice import tts
+
+    seen = {}
+
+    class FakeCommunicate:
+        def __init__(self, text, voice, **kw):
+            seen.update(kw)
+
+        async def stream(self):
+            yield {"type": "audio", "data": b"mp3"}
+
+    monkeypatch.setattr(tts.edge_tts, "Communicate", FakeCommunicate)
+    asyncio.run(tts.synth_edge("hi", "v", tmp_path / "a.mp3", rate="+8%"))
+    assert seen["rate"] == "+8%"
+
+
+def test_voice_rate_setting():
+    from vidgen.config import get_settings
+    assert get_settings().pipeline.voice_rate.endswith("%")
 
 
 def test_split_ignores_punctuation_boundaries_and_nfc_differences():

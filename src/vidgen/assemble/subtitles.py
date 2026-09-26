@@ -1,12 +1,13 @@
 """Word timings → ASS subtitles.
 
-Short: 1-3 big words per chunk, karaoke-filled as they are spoken (\\kf), popping in, key words
-(numbers, names, the video's recurring topic words) larger and coloured. Long: 2-line chunks
-balanced by characters. Chunks follow meaning: never end on a function word, keep a number with its
+Short: one line of 3-6 words, white with a black outline; the word being spoken turns yellow (\\k).
+No pop-in or zoomed keywords: they read as busy. Long: 2-line chunks balanced by characters, key words
+(numbers, names, the video's recurring topic words) coloured. Chunks follow meaning: never end on a function word, keep a number with its
 unit, don't strand one word before a full stop. Positions keep clear of TikTok/Shorts/Reels UI.
 """
 
 import re
+import warnings
 from collections import Counter
 
 from vidgen.config import FormatPreset
@@ -17,15 +18,16 @@ FONT = "Be Vietnam Pro"
 WHITE, YELLOW, CYAN, BLACK = "&H00FFFFFF", "&H0000E5FF", "&H00F5D65C", "&H00000000"
 HIGHLIGHT = r"{\c&H0000E5FF&}"  # long-format emphasis colour (yellow)
 SENTENCE_PUNCT = (".", "!", "?", "…", ",", ";", ":")
-SHORT_MAX_WORDS = 3
+SHORT_MAX_WORDS = 6
+SHORT_MIN_WORDS = 3
+SHORT_IDEAL_WORDS = 4
+SHORT_MAX_CHARS = 26
+SENTENCE_END = (".", "!", "?", "…")
 LONG_MAX_WORDS = 12
 LONG_LINE_CHARS = 42
 PAUSE_BREAK = 0.3   # a gap this long between words starts a new chunk
 HOLD_AFTER = 0.25   # keep the last chunk of a pause on screen a little longer
 MAX_TOPIC_WORDS = 4
-POP = r"{\fscx86\fscy86\t(0,110,\fscx100\fscy100)}"  # chunk pops in over 110 ms
-EMPHASIS_ON = r"{\2c" + CYAN + r"&\fscx114\fscy114}"
-EMPHASIS_OFF = r"{\2c" + WHITE + r"&\fscx100\fscy100}"
 
 # words a chunk must not end on (the listener expects what follows)
 FUNCTION_WORDS = set("""
@@ -40,7 +42,7 @@ STYLES = {
     # fontsize, outline, shadow, margin_l, margin_r, margin_v — tuned for 1080x1920 / 1920x1080.
     # short: right margin wider than left to clear the like/comment/share column; margin_v keeps the
     # text above the caption/music strip at the bottom of TikTok/Shorts/Reels.
-    "short": (90, 7, 3, 110, 210, 620),
+    "short": (76, 6, 3, 110, 210, 620),  # 26 chars at 76px ≈ 730px: fits one line between margins
     "long": (58, 3, 1, 200, 200, 80),
 }
 
@@ -138,6 +140,96 @@ def chunk_words(words: list[WordTiming], max_words: int, orphan_lookahead: int =
     return chunks
 
 
+def _segments(words: list[WordTiming]) -> list[list[WordTiming]]:
+    """Split at sentence ends and real pauses; a chunk never spans those."""
+    out: list[list[WordTiming]] = []
+    current: list[WordTiming] = []
+    for i, w in enumerate(words):
+        current.append(w)
+        nxt = words[i + 1] if i + 1 < len(words) else None
+        if nxt is None or w.word.endswith(SENTENCE_END) or nxt.start - w.end > PAUSE_BREAK:
+            out.append(current)
+            current = []
+    return out
+
+
+def _chunk_cost(chunk: list[WordTiming], closes_segment: bool) -> float:
+    n, chars = len(chunk), len(" ".join(w.word for w in chunk))
+    if n > SHORT_MAX_WORDS or (chars > SHORT_MAX_CHARS and n > 1):
+        return float("inf")
+    cost = abs(n - SHORT_IDEAL_WORDS)
+    if n < SHORT_MIN_WORDS:
+        cost += 10  # only when the sentence leaves no better split
+    last = chunk[-1].word
+    if not closes_segment:
+        if _bare(last) in FUNCTION_WORDS or _is_number(last):
+            cost += 8  # "để" / "3" at a line end: the viewer waits for the rest
+        if last.endswith(SENTENCE_PUNCT):
+            cost -= 2  # a comma is a natural place to break
+    return cost
+
+
+def compound_pairs(script: Script) -> set[tuple[str, str]]:
+    """Syllable pairs that form one Vietnamese word ("tài khoản", "mật khẩu"): Vietnamese writes compound
+    words with a space, so a phrase break must not fall between them. From a word segmenter (pyvi), plus
+    pairs the narration keeps repeating (a topic word the segmenter doesn't know)."""
+    if script.lang != "vi":
+        return set()
+    pairs: Counter[tuple[str, str]] = Counter()
+    for scene in script.scenes:
+        tokens = scene.narration.split()
+        for a, b in zip(tokens, tokens[1:]):
+            if not a.endswith(SENTENCE_PUNCT) and _bare(a) not in FUNCTION_WORDS and _bare(b) not in FUNCTION_WORDS:
+                pairs[(_bare(a), _bare(b))] += 1
+    glue = {p for p, n in pairs.items() if n >= 2}
+    tokenize = _vi_tokenizer()
+    for scene in script.scenes if tokenize else ():
+        for word in tokenize(scene.narration).split():
+            syllables = [_bare(s) for s in word.split("_")]
+            # pyvi sometimes merges two words ("thực_hiện_hành_động"); most Vietnamese words have two
+            # syllables, so glue pairwise and leave the boundary between pairs breakable
+            glue |= set(zip(syllables[::2], syllables[1::2]))
+    return glue
+
+
+def _vi_tokenizer():
+    try:
+        with warnings.catch_warnings():  # pyvi's regexes trigger SyntaxWarnings on first import
+            warnings.simplefilter("ignore")
+            from pyvi import ViTokenizer
+    except ImportError:
+        return None
+    return ViTokenizer.tokenize
+
+
+def short_chunks(words: list[WordTiming], glue: set[tuple[str, str]] = frozenset()) -> list[list[WordTiming]]:
+    """Best split of each sentence into one-line phrases: 3-6 words, ≤ SHORT_MAX_CHARS, not ending on a
+    function word or a bare number, not splitting a `glue` pair, preferring commas and ~4 words
+    (dynamic programming, not greedy, so the last phrase of a sentence is never a lone word)."""
+    chunks: list[list[WordTiming]] = []
+    for seg in _segments(words):
+        n = len(seg)
+        best: list[tuple[float, int]] = [(0.0, 0)] + [(float("inf"), 0)] * n  # (cost, previous cut)
+        for end in range(1, n + 1):
+            split_word = end < n and (_bare(seg[end - 1].word), _bare(seg[end].word)) in glue
+            for start in range(max(0, end - SHORT_MAX_WORDS), end):
+                c = best[start][0] + _chunk_cost(seg[start:end], end == n) + (8 if split_word else 0)
+                if c < best[end][0]:
+                    best[end] = (c, start)
+        if best[n][0] == float("inf"):  # one word longer than a line: give it a line of its own
+            chunks += [[w] for w in seg]
+            continue
+        cuts, end = [], n
+        while end > 0:
+            cuts.append(end)
+            end = best[end][1]
+        start = 0
+        for end in reversed(cuts):
+            chunks.append(seg[start:end])
+            start = end
+    return chunks
+
+
 def two_lines(tokens: list[str], max_chars: int = LONG_LINE_CHARS) -> str:
     """Split at the word boundary that best balances the two lines by character length."""
     if len(" ".join(tokens)) <= max_chars or len(tokens) < 2:
@@ -155,20 +247,16 @@ def _chunk_end(chunk: list[WordTiming], next_chunk: list[WordTiming] | None) -> 
     return chunk[-1].end + HOLD_AFTER
 
 
-def _events_short(chunks: list[list[WordTiming]], emphasis: set[str]) -> list[tuple[float, float, str]]:
-    """One karaoke event per chunk: each word fills white→yellow over its own spoken duration."""
+def _events_short(chunks: list[list[WordTiming]]) -> list[tuple[float, float, str]]:
+    """One event per phrase; each word switches white→yellow when it is spoken (karaoke \\k)."""
     events = []
     for ci, chunk in enumerate(chunks):
         end = _chunk_end(chunk, chunks[ci + 1] if ci + 1 < len(chunks) else None)
         parts = []
         for k, w in enumerate(chunk):
             until = chunk[k + 1].start if k + 1 < len(chunk) else w.end
-            cs = max(1, round((until - w.start) * 100))
-            word = _escape(w.word)
-            if _bare(w.word) in emphasis:
-                word = f"{EMPHASIS_ON}{word}{EMPHASIS_OFF}"
-            parts.append(f"{{\\kf{cs}}}{word}")
-        events.append((chunk[0].start, end, POP + " ".join(parts)))
+            parts.append(f"{{\\k{max(1, round((until - w.start) * 100))}}}{_escape(w.word)}")
+        events.append((chunk[0].start, end, " ".join(parts)))
     return events
 
 
@@ -192,12 +280,11 @@ def build_ass(script: Script, timeline: Timeline, preset: FormatPreset) -> str:
     fmt = script.format
     size, outline, shadow, margin_l, margin_r, margin_v = STYLES[fmt]
     words = display_words(script, timeline)
-    emphasis = emphasis_words(script)
     if fmt == "short":
-        events = _events_short(chunk_words(words, SHORT_MAX_WORDS, orphan_lookahead=1), emphasis)
+        events = _events_short(short_chunks(words, compound_pairs(script)))
         primary, secondary = YELLOW, WHITE  # karaoke: unsung (secondary) → sung (primary)
     else:
-        events = _events_long(chunk_words(words, LONG_MAX_WORDS, orphan_lookahead=2), emphasis)
+        events = _events_long(chunk_words(words, LONG_MAX_WORDS, orphan_lookahead=2), emphasis_words(script))
         primary, secondary = WHITE, WHITE
 
     header = f"""[Script Info]

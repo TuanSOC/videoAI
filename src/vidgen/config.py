@@ -51,6 +51,7 @@ class PipelineConfig(BaseModel):
     cache_dir: Path = Path("cache")
     formats: dict[str, FormatPreset]
     voices: dict[str, str]
+    voice_rate: str = "+8%"  # edge-tts speaking rate; the default pace sounds slow for short videos
     llm: LLMConfig = LLMConfig()
     research: bool = True  # ground scripts in Wikipedia passages (script/research.py)
     ai: AIConfig = AIConfig()

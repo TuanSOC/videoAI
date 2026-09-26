@@ -16,13 +16,14 @@ class TTSError(RuntimeError):
     pass
 
 
-async def synth_edge(text: str, voice: str, out: Path, attempts: int = 4) -> list[WordTiming]:
+async def synth_edge(text: str, voice: str, out: Path, attempts: int = 4,
+                     rate: str = "+0%") -> list[WordTiming]:
     """Write MP3 to `out`; return word timings relative to the start of that file."""
     for attempt in range(1, attempts + 1):
         try:
             audio = bytearray()
             words: list[WordTiming] = []
-            async for chunk in edge_tts.Communicate(text, voice, boundary="WordBoundary").stream():
+            async for chunk in edge_tts.Communicate(text, voice, rate=rate, boundary="WordBoundary").stream():
                 if chunk["type"] == "audio":
                     audio += chunk["data"]
                 elif chunk["type"] == "WordBoundary":

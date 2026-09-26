@@ -18,6 +18,7 @@ formats:
 voices:
   vi: vi-VN-HoaiMyNeural
   en: en-US-AndrewMultilingualNeural
+voice_rate: "+8%"   # edge-tts speaking rate ("+0%" = default pace)
 
 llm:
   # tried in order; "gemini" may bill once its free quota is exceeded, so it's off by default
