@@ -1,3 +1,4 @@
+from vidgen.script.writer import WORDS_PER_SECOND
 import json
 
 import pytest
@@ -321,7 +322,7 @@ def test_length_fields_and_actual_only_while_script_unchanged(env):
     slug = create(client, jobs)
     d = s.pipeline.output_dir / slug
     v = client.get(f"/api/videos/{slug}").json()
-    assert v["target_seconds"] == [45, 75] and v["wps"] == 3.3 and v["actual_seconds"] is None
+    assert v["target_seconds"] == [45, 75] and v["wps"] == WORDS_PER_SECOND["vi"] and v["actual_seconds"] is None
 
     from vidgen import pipeline
     from vidgen.models import SceneAudio, Timeline

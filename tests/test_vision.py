@@ -70,14 +70,14 @@ def tc(uid, text, kind="video", thumb=True):
 class FakeStock:
     source = "pexels"
 
-    def __init__(self, videos):
-        self._v = videos
+    def __init__(self, hits):
+        self._h = hits
 
     def videos(self, q, o):
-        return self._v.get(q, [])
+        return [c for c in self._h.get(q, []) if c.kind == "video"]
 
     def photos(self, q, o):
-        return []
+        return [c for c in self._h.get(q, []) if c.kind == "image"]
 
 
 class FakeVision:
@@ -154,3 +154,27 @@ def test_vision_calls_capped_per_scene(tmp_path, fake_io):
         Scene(id=1, narration="n", visual_query="old ship wreck underwater"), 5)
     assert len(judge.calls) <= sel.VISION_CALLS_PER_SCENE
     assert asset.uid in {"r1", "r2", "r3"}
+
+
+def test_adjective_is_never_the_video_subject():
+    qs = ["fake login page", "fake bank email", "fake website", "phone screen", "fake qr code"]
+    assert sel.video_subject(qs) is None
+
+
+def test_after_vision_budget_unjudged_clips_are_not_taken_blindly(tmp_path, fake_io):
+    # the first rounds only find poor clips (judged); later rounds must not pick unjudged ones by name
+    rounds = {"old ship wreck underwater": [tc("r1", "old ship wreck underwater")],
+              "old ship": [tc("r2", "old ship")], "wreck underwater": [tc("r3", "wreck underwater")],
+              "ship": [tc("r4", "ship")]}
+    judge = FakeVision({"r1": 4, "r2": 3, "r3": 2, "r4": 1})
+    asset = selector(tmp_path, FakeStock(rounds), judge).pick(
+        Scene(id=1, narration="n", visual_query="old ship wreck underwater"), 5)
+    assert asset.vision_score is not None and asset.uid == "r1"
+
+
+def test_hopeless_scores_fall_through_to_next_step(tmp_path, fake_io):
+    stock = FakeStock({"ocean waves": [tc("v", "ocean waves"), tc("p", "ocean waves", kind="image")]})
+    # video round: 1/10 → no fallback (below MIN_FALLBACK); then the image step
+    judge = FakeVision({"v": 1, "p": 8})
+    asset = selector(tmp_path, stock, judge).pick(Scene(id=1, narration="n", visual_query="ocean waves"), 5)
+    assert asset.uid == "p"

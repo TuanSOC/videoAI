@@ -31,8 +31,9 @@ DOWNLOAD_WORKERS = 4
 MAX_REJECTED = 50
 EXTRA_AFTER = 5.0  # seconds: longer scenes also get their next-best clip, cut in as a second shot
 VISION_TOP = 5     # thumbnails shown to the vision judge per search round
-MIN_VISION = 5     # below this the clip only illustrates loosely: keep looking
-VISION_CALLS_PER_SCENE = 2
+MIN_VISION = 6     # below this the clip only illustrates loosely: keep looking
+MIN_FALLBACK = 3   # a loose match still beats a placeholder; below this it doesn't
+VISION_CALLS_PER_SCENE = 3
 IMAGE_PENALTY = 1  # a still image scores one point below an equally good video
 
 
@@ -61,6 +62,11 @@ STOPWORDS = set("""a an the of in on at to from for with and or by over under be
     through during about above below up down out off while being is are was were be showing shows show
     view views shot shots footage video clip close closeup background image photo picture scene""".split())
 SUBJECT_SHARE = 0.4  # a word in ≥40% of the scenes' queries is what the video is about
+# describing words the LLM repeats across queries ("fake login page", "fake bank email"): never the
+# subject, or shortened searches end up as just "fake" (seen live: a stack of money, a silly portrait)
+ADJECTIVES = set("""fake suspicious dark old new big small large tiny close digital online virtual modern
+    ancient young bright red blue green black white golden beautiful scary strange real secret hidden
+    dangerous safe urgent unknown famous empty busy quiet""".split())
 
 
 def stem(w: str) -> str:
@@ -89,7 +95,7 @@ def content_words(text: str) -> set[str]:
 
 def video_subject(queries: list[str]) -> str | None:
     """The word most scenes' queries share ("octopus"), if any is shared by enough of them."""
-    counts: Counter[str] = Counter(w for q in queries for w in content_words(q))
+    counts: Counter[str] = Counter(w for q in queries for w in content_words(q) if w not in ADJECTIVES)
     if not counts:
         return None
     word, n = counts.most_common(1)[0]
@@ -184,13 +190,14 @@ class Selector:
         self.judge = judge      # optional LLM tie-breaker for weak matches
         self.vision = vision    # optional vision judge (visuals/vision.py): scores thumbnails
         self.vision_calls = 0
+        self.vision_ok = False  # the vision judge has answered for the current scene
         self.pool: ThreadPoolExecutor | None = None  # set while sourcing a whole video
         self.pending: list[tuple[Scene, Asset, Future]] = []
         self.extra_pending: list[tuple[Asset, str, Future]] = []
 
     def pick(self, scene: Scene, seconds: float) -> Asset:
         self.visuals_dir.mkdir(parents=True, exist_ok=True)
-        self.vision_calls = 0
+        self.vision_calls, self.vision_ok = 0, False
         steps: list[Callable[[], Asset | None]] = []
         if scene.visual_type == "ai_video" and self.ai_video_budget > 0:
             steps.append(lambda: self._ai(scene, video=True))
@@ -269,6 +276,10 @@ class Selector:
                 continue
             seen = self._vision_scores(scene, queries, ranked)
             raw: dict[str, int] = {}
+            if seen is None and self.vision_ok and strict:
+                # the model has been judging this scene but can't look at these (budget spent, no
+                # thumbnails): don't take a clip on its name alone — the best judged one is kept below
+                continue
             if seen is not None:
                 judged = True  # the vision model has looked at them: no text tie-breaker needed
                 raw, adjusted = seen
@@ -276,7 +287,7 @@ class Selector:
                               key=lambda c: -adjusted[c.uid])
                 if not good:
                     best_low = max((c for c in ranked if c.uid in adjusted), key=lambda c: adjusted[c.uid])
-                    if fallback is None or adjusted[best_low.uid] > fallback[0]:
+                    if adjusted[best_low.uid] >= MIN_FALLBACK and (fallback is None or adjusted[best_low.uid] > fallback[0]):
                         fallback = (adjusted[best_low.uid], best_low, query_of[best_low.uid], raw[best_low.uid])
                     if strict:
                         continue  # nothing good in this round: a simpler query may find better
@@ -335,6 +346,7 @@ class Selector:
         scores = self.vision.score(scene.narration, queries, images)
         if scores is None:
             return None
+        self.vision_ok = True
         raw = {c.uid: s for c, s in zip(shown, scores)}
         adjusted = {c.uid: s - (IMAGE_PENALTY if c.kind == "image" else 0) for c, s in zip(shown, scores)}
         log.info("scene %d: vision scores %s", scene.id, raw)
@@ -425,7 +437,7 @@ class Selector:
         """Another clip for one scene, never one already used anywhere in the video.
         No query: next saved alternate, else a fresh search on the scene's query. Query: search it."""
         self.visuals_dir.mkdir(parents=True, exist_ok=True)
-        self.vision_calls = 0
+        self.vision_calls, self.vision_ok = 0, False
         # never offer back the current clip nor any clip already swapped away from this scene
         self.used = set(used) | {current.uid, current.url, *current.rejected} - {""}
         rejected = (current.rejected + [current.ident])[-MAX_REJECTED:] if current.ident else current.rejected

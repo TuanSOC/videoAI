@@ -327,3 +327,9 @@ def test_script_mood_normalised():
     from vidgen.script.writer import normalize_mood
 
     assert normalize_mood(" Tense ") == "tense" and normalize_mood("angry") == ""
+
+
+def test_sentence_end_inside_quotes():
+    chunks = [[x.word for x in c] for c in subs.short_chunks(ws(*"Hỏi: 'Email này có thật không?' Rồi kiểm tra lại.".split()))]
+    k = next(i for i, c in enumerate(chunks) if c[-1] == "không?'")   # the quoted question ends a phrase
+    assert chunks[k + 1][0] == "Rồi" and chunks[-1][-1] == "lại."

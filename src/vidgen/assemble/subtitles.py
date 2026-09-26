@@ -140,6 +140,11 @@ def chunk_words(words: list[WordTiming], max_words: int, orphan_lookahead: int =
     return chunks
 
 
+def _ends(word: str, punct: tuple[str, ...]) -> bool:
+    """Punctuation at the end of a word, looking past closing quotes/brackets ("không?'")."""
+    return word.rstrip("'\"”’»)]").endswith(punct)
+
+
 def _segments(words: list[WordTiming]) -> list[list[WordTiming]]:
     """Split at sentence ends and real pauses; a chunk never spans those."""
     out: list[list[WordTiming]] = []
@@ -147,7 +152,7 @@ def _segments(words: list[WordTiming]) -> list[list[WordTiming]]:
     for i, w in enumerate(words):
         current.append(w)
         nxt = words[i + 1] if i + 1 < len(words) else None
-        if nxt is None or w.word.endswith(SENTENCE_END) or nxt.start - w.end > PAUSE_BREAK:
+        if nxt is None or _ends(w.word, SENTENCE_END) or nxt.start - w.end > PAUSE_BREAK:
             out.append(current)
             current = []
     return out
@@ -164,7 +169,7 @@ def _chunk_cost(chunk: list[WordTiming], closes_segment: bool) -> float:
     if not closes_segment:
         if _bare(last) in FUNCTION_WORDS or _is_number(last):
             cost += 8  # "để" / "3" at a line end: the viewer waits for the rest
-        if last.endswith(SENTENCE_PUNCT):
+        if _ends(last, SENTENCE_PUNCT):
             cost -= 2  # a comma is a natural place to break
     return cost
 
