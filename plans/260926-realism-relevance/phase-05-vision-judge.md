@@ -1,10 +1,11 @@
 ---
 phase: 5
-title: "Vision Judge"
-status: pending
+title: Vision Judge
+status: in-progress
 priority: P1
-effort: "4h"
-dependencies: [4]
+effort: 4h
+dependencies:
+  - 4
 ---
 
 # Phase 5: Vision Judge

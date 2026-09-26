@@ -230,3 +230,17 @@ def test_extend_script_keeps_non_contiguous_chapters_in_place():
     out = writer.extend_script(s, get_settings().preset("long"), LLMChain([Same()]))
     order = [sc.chapter for sc in out.scenes]
     assert order == ["A", "A", "B", "B", "A"]  # runs extended in place, nothing merged; closing kept last
+
+
+def test_postprocess_cleans_alt_queries():
+    sc = Scene(id=0, narration="Hi.", visual_query="phone screen link",
+               alt_queries=["finger tapping phone", "Phone screen link", "bàn tay", "laptop inbox", "extra one"])
+    [out] = writer.postprocess([sc], 1)
+    assert out.alt_queries == ["finger tapping phone", "laptop inbox"]  # English, not the main query, max 2
+
+
+def test_short_prompt_asks_for_alt_queries():
+    from vidgen.script.writer import LLMScene
+
+    assert "alt_queries" in LLMScene.model_fields
+    assert "alt_queries" in (writer.PROMPTS / "short.md").read_text(encoding="utf-8")

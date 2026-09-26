@@ -28,6 +28,7 @@ class Candidate:
     source: str
     license: str
     text: str = ""    # what the clip shows (Pexels page slug / alt text, Pixabay tags) for relevance
+    thumb: str = ""   # small preview image, for the vision judge
 
 
 def slug_text(page_url: str) -> str:
@@ -98,7 +99,8 @@ class Pexels(StockClient):
                 out.append(Candidate(f"pexels:v{v['id']}", "video", f["link"], v.get("url", ""),
                                      f["width"] or v["width"], f["height"] or v["height"],
                                      float(v.get("duration") or 0), v.get("user", {}).get("name", ""),
-                                     self.source, self.license, slug_text(v.get("url", ""))))
+                                     self.source, self.license, slug_text(v.get("url", "")),
+                                     v.get("image", "")))
         return out
 
     def photos(self, query, orientation):
@@ -107,7 +109,8 @@ class Pexels(StockClient):
                          self._headers())
         return [Candidate(f"pexels:p{p['id']}", "image", p["src"]["large2x"], p.get("url", ""),
                           p["width"], p["height"], 0.0, p.get("photographer", ""), self.source, self.license,
-                          f'{p.get("alt") or ""} {slug_text(p.get("url", ""))}'.strip())
+                          f'{p.get("alt") or ""} {slug_text(p.get("url", ""))}'.strip(),
+                          p.get("src", {}).get("medium", ""))
                 for p in data.get("photos", [])]
 
 
@@ -124,7 +127,8 @@ class Pixabay(StockClient):
             if f:
                 out.append(Candidate(f"pixabay:v{h['id']}", "video", f["url"], h.get("pageURL", ""),
                                      f["width"], f["height"], float(h.get("duration") or 0),
-                                     h.get("user", ""), self.source, self.license, h.get("tags", "")))
+                                     h.get("user", ""), self.source, self.license, h.get("tags", ""),
+                                     _pixabay_thumb(h)))
         return out
 
     def photos(self, query, orientation):
@@ -134,8 +138,17 @@ class Pixabay(StockClient):
                           "safesearch": "true"})
         return [Candidate(f"pixabay:p{h['id']}", "image", h["largeImageURL"], h.get("pageURL", ""),
                           h.get("imageWidth", 0), h.get("imageHeight", 0), 0.0, h.get("user", ""),
-                          self.source, self.license, h.get("tags", ""))
+                          self.source, self.license, h.get("tags", ""), h.get("webformatURL", ""))
                 for h in data.get("hits", [])]
+
+
+def _pixabay_thumb(hit: dict) -> str:
+    """Pixabay video hits carry a thumbnail per rendition (newer API); older ones only a picture id."""
+    for v in hit.get("videos", {}).values():
+        if v.get("thumbnail"):
+            return v["thumbnail"]
+    pid = hit.get("picture_id")
+    return f"https://i.vimeocdn.com/video/{pid}_640x360.jpg" if pid else ""
 
 
 def url_suffix(url: str) -> str:

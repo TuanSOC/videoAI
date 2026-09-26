@@ -20,4 +20,5 @@ Rules:
   than the current version ($current_words).
 - Keep it factual: only facts from the reference material; no invented numbers or names.
 - `visual_query`: ALWAYS in English, ONE short phrase of 2-4 concrete filmable words matching the new text.
+- `alt_queries`: 2 MORE English stock queries for the same scene, filmed differently: one close-up of a concrete object or action (e.g. "finger tapping phone screen"), one wider setting (e.g. "person at laptop in dark room"). Same rules as `visual_query`; show what is happening, not abstract ideas ("hacker" → "hooded person typing on laptop").
 - `visual_type`: "stock".

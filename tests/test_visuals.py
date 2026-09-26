@@ -422,3 +422,54 @@ def test_long_scene_gets_extra_clip_short_scene_does_not(tmp_path, fake_download
     assert (tmp_path / "visuals" / "scene_001b.mp4").exists()
     assert "b" not in [x.uid for x in assets[0].alternates]  # the extra clip isn't offered as a swap
     assert assets[1].uid == "c"                              # nor reused for another scene
+
+
+# --- query set, thumbnails, junk filter ------------------------------------------------------------
+def test_fallback_queries_never_end_on_a_stopword():
+    out = sel.fallback_queries("email with suspicious attachment")
+    assert "email with" not in out and all(q.split()[-1] not in sel.STOPWORDS for q in out)
+    assert sel.fallback_queries("person clicking on suspicious link")[1:] == ["person clicking", "suspicious link"]
+
+
+def test_pexels_and_pixabay_parse_thumbnails(tmp_path):
+    videos = {"videos": [{**PEXELS_VIDEOS["videos"][0], "image": "https://img/v1.jpg"}]}
+    photos = {"photos": [{"id": 2, "width": 1080, "height": 1920, "url": "https://pexels.com/photo/x-2/",
+                          "photographer": "Bo", "alt": "hand on phone",
+                          "src": {"large2x": "https://img/big.jpg", "medium": "https://img/med.jpg"}}]}
+    px = Pexels("k", tmp_path, transport({"https://api.pexels.com/videos": videos,
+                                          "https://api.pexels.com/v1": photos}))
+    assert px.videos("q", "portrait")[0].thumb == "https://img/v1.jpg"
+    assert px.photos("q", "portrait")[0].thumb == "https://img/med.jpg"
+    hits = {"hits": [{**PIXABAY_VIDEOS["hits"][0],
+                      "videos": {**PIXABAY_VIDEOS["hits"][0]["videos"],
+                                 "tiny": {"url": "https://x/t.mp4", "width": 640, "height": 360,
+                                          "thumbnail": "https://img/pb.jpg"}}}]}
+    pb = Pixabay("k", tmp_path / "pb", transport({"https://pixabay.com/api/videos": hits}))
+    assert pb.videos("q", "portrait")[0].thumb == "https://img/pb.jpg"
+
+
+def test_green_screen_and_mockups_are_never_picked(tmp_path, fake_download):
+    stock = FakeStock(videos={"computer screen with fake login form": [
+        tcand("green", "a computer monitor with a green screen on it"),
+        tcand("login", "person typing login form on computer screen", 1920, 1080)]})
+    asset = make_selector(tmp_path, [stock]).pick(scene(1, q="computer screen with fake login form"), 5)
+    assert asset.uid == "login"
+    assert "green" not in [a.uid for a in asset.alternates]
+
+
+def test_scene_alt_queries_are_searched_together(tmp_path, fake_download):
+    stock = FakeStock(videos={
+        "person clicking suspicious link": [tcand("palm", "a close up of a person s hand")],
+        "finger tapping link on phone screen": [tcand("tap", "finger tapping link on phone screen")]})
+    sc = Scene(id=1, narration="n", visual_query="person clicking suspicious link",
+               alt_queries=["finger tapping link on phone screen", "laptop email inbox"])
+    asset = make_selector(tmp_path, [stock]).pick(sc, 5)
+    assert asset.uid == "tap" and asset.query == "finger tapping link on phone screen"
+    assert asset.alternates == [] or asset.alternates[0].uid == "palm"
+
+
+def test_alternate_keeps_thumb():
+    import dataclasses
+
+    c = dataclasses.replace(tcand("a", "x"), thumb="https://img/a.jpg")
+    assert sel._alternate(c).thumb == "https://img/a.jpg"

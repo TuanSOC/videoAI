@@ -559,7 +559,8 @@ async function aiRewrite(slug, i, btn, lang, job) {
   btn.disabled = true;
   btn.textContent = "Đang viết…";
   try {
-    const before = { narration: scene.narration, visual_query: scene.visual_query };
+    const before = { narration: scene.narration, visual_query: scene.visual_query,
+                     alt_queries: scene.alt_queries || [] };
     const out = await api(`/api/videos/${slug}/scenes/${scene.id}/rewrite`, { method: "POST",
       body: { narration: scene.narration, instruction: instruction || null } });
     // the user may have moved/removed scenes while waiting: follow the scene object, not the index
@@ -568,6 +569,7 @@ async function aiRewrite(slug, i, btn, lang, job) {
     aiUndo.set(now, before);
     scene.narration = out.narration;
     scene.visual_query = out.visual_query;
+    scene.alt_queries = out.alt_queries || [];
     aiOpen.delete(now);
     markDirty();
     renderScenes(lang, false, job);
@@ -638,6 +640,8 @@ function wireDetail(slug, v) {
     const f = ev.target.dataset.f;
     if (!card || !f) return;
     draft.scenes[+card.dataset.i][f] = ev.target.value;
+    // hand-typed query: the AI's extra queries described the old idea
+    if (f === "visual_query") draft.scenes[+card.dataset.i].alt_queries = [];
     markDirty();
     if (f === "narration") {
       const w = words(ev.target.value);

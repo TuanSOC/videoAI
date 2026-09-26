@@ -12,6 +12,7 @@ class Scene(BaseModel):
     id: int
     narration: str
     visual_query: str = Field(description="2-4 concrete English nouns for stock search")
+    alt_queries: list[str] = []  # other ways to film the same scene (close-up, wider setting)
     visual_type: VisualType = "stock"
     ai_prompt: str = ""
     chapter: str | None = None
@@ -110,6 +111,7 @@ class Alternate(BaseModel):
     source: str
     license: str
     text: str = ""  # clip description, for relevance when swapping
+    thumb: str = ""  # preview image, for the vision judge
 
 
 class Asset(BaseModel):

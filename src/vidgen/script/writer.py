@@ -22,6 +22,7 @@ WORDS_PER_SECOND = {"vi": 3.3, "en": 2.5}
 MAX_SCENE_WORDS = 25
 MIN_SCENE_WORDS = 5
 SECONDS_PER_CHAPTER = 90
+MAX_ALT_QUERIES = 2
 MIN_LENGTH_RATIO = 0.8  # below this share of the target word count, request one longer draft
 
 
@@ -29,6 +30,7 @@ MIN_LENGTH_RATIO = 0.8  # below this share of the target word count, request one
 class LLMScene(BaseModel):
     narration: str
     visual_query: str
+    alt_queries: list[str] = []
     visual_type: VisualType = "stock"
     ai_prompt: str = ""
 
@@ -183,7 +185,19 @@ def rewrite_one(script: Script, scene: Scene, prev: str, nxt: str, instruction: 
             out = retry
     if not out.visual_query.isascii():  # seen live: a Vietnamese query, useless for stock search
         out = out.model_copy(update={"visual_query": scene.visual_query})
-    return out
+    return out.model_copy(update={"alt_queries": clean_alt_queries(out.visual_query, out.alt_queries)})
+
+
+def clean_alt_queries(main: str, alts: list[str]) -> list[str]:
+    """English only (stock search), different from the main query and each other, at most MAX_ALT_QUERIES."""
+    seen = {main.strip().casefold()}
+    out = []
+    for q in alts:
+        q = q.strip()
+        if q and q.isascii() and q.casefold() not in seen:
+            seen.add(q.casefold())
+            out.append(q)
+    return out[:MAX_ALT_QUERIES]
 
 
 def extend_script(script: Script, preset: FormatPreset, llm: LLMChain, sources: list[Source] | None = None,
@@ -205,7 +219,8 @@ def extend_script(script: Script, preset: FormatPreset, llm: LLMChain, sources: 
         share = (target - total) * words / total
         grown = None
         if chapter != "Intro" and share >= WORDS_PER_NEW_SCENE / 2:
-            drafts = [LLMScene(narration=s.narration, visual_query=s.visual_query, visual_type=s.visual_type,
+            drafts = [LLMScene(narration=s.narration, visual_query=s.visual_query, alt_queries=s.alt_queries,
+                               visual_type=s.visual_type,
                                ai_prompt=s.ai_prompt) for s in scenes]
             # only the last chapter holds the closing question that must stay last
             grown = expand_scenes(drafts, int(words + share), ctx, script.lang, llm,
@@ -326,6 +341,7 @@ def postprocess(scenes: list[Scene], max_ai_video: int) -> list[Scene]:
         for i, part in enumerate(split_narration(scene.narration)):
             out.append(scene.model_copy(update={
                 "id": len(out) + 1,
+                "alt_queries": clean_alt_queries(scene.visual_query, scene.alt_queries),
                 "narration": part,
                 # only the first split part keeps the AI treatment; the rest use stock
                 "visual_type": vtype if i == 0 else "stock",

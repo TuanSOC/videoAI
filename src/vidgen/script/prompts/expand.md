@@ -17,3 +17,4 @@ Rules:
 - Each new scene: 1-2 sentences (max 25 words) with a concrete fact from the reference material that
   the script does not state yet. No filler, no repetition, no invented numbers.
 - `visual_query`: ALWAYS in English, ONE short phrase of 2-4 concrete filmable words. `visual_type`: "stock".
+- `alt_queries`: 2 MORE English stock queries for the same scene, filmed differently: one close-up of a concrete object or action (e.g. "finger tapping phone screen"), one wider setting (e.g. "person at laptop in dark room"). Same rules as `visual_query`; show what is happening, not abstract ideas ("hacker" → "hooded person typing on laptop").

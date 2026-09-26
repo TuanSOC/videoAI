@@ -40,7 +40,7 @@ def _alternate(c: Candidate | Alternate) -> Alternate:
         return c
     return Alternate(uid=c.uid, kind=c.kind, download_url=c.download_url, page_url=c.page_url,
                      width=c.width, height=c.height, duration=c.duration, author=c.author,
-                     source=c.source, license=c.license, text=c.text)
+                     source=c.source, license=c.license, text=c.text, thumb=c.thumb)
 
 
 def score(c: Candidate, orientation: str, scene_seconds: float) -> int:
@@ -100,6 +100,15 @@ OFF_CONTEXT = {stem(w) for w in """dish dishes food meal plate cooking cooked co
     print poster""".split()}
 
 
+# Never usable whatever the query: a green screen shows nothing, mockups are templates to fill in.
+JUNK = ("green screen", "greenscreen", "chroma key", "chromakey", "mockup", "mock up", "template")
+
+
+def is_junk(c: Candidate | Alternate) -> bool:
+    text = c.text.lower().replace("-", " ")
+    return any(j in text for j in JUNK)
+
+
 def relevance(c: Candidate, query_words: set[str], subject: str | None) -> int:
     """Query words found in the clip's description; the subject counts double and, when the scene is
     about it, is mandatory (0 = irrelevant). Off-context words (food, toys, statues…) cost 2 unless the
@@ -131,12 +140,14 @@ def fallback_queries(query: str, subject: str | None = None) -> list[str]:
         if last:
             out.append(f"{subject_word} {last}")
         out.append(subject_word)
-    else:  # no shared subject: keep two-word phrases, a lone last word ("activity") is too vague
+    else:  # no shared subject: two-word phrases of real words ("email with" is no query), a lone last
+        # word ("activity") is too vague
+        words = [t for t in words if t.lower().strip(".") not in STOPWORDS]
         if len(words) > 2:
             out.append(" ".join(words[:2]))
             out.append(" ".join(words[-2:]))
         elif len(words) == 2:
-            out.append(words[-1])
+            out.append(" ".join(words) if len(parts[0].split()) > 2 else words[-1])
     return list(dict.fromkeys(out))
 
 
@@ -212,31 +223,46 @@ class Selector:
         """Search stock for the scene. Ranking: relevance to the scene query first, technical fit second.
         strict: skip clips whose description doesn't match (a fallback query or the next step may do
         better); non-strict is the last resort before a placeholder."""
-        base = query_text or scene.visual_query
-        query_words = content_words(base)
-        subject = self.subject if self.subject in query_words else None
+        queries = [query_text] if query_text else [scene.visual_query, *scene.alt_queries]
+        base = queries[0]
+        subject = self.subject if self.subject in content_words(base) else None
+        # first all of the scene's queries together (the same moment filmed differently), then shorter
+        # forms of the main one: stock search is literal and misses on long phrases
+        rounds = [queries] + [[q] for q in fallback_queries(base, subject)[1:]]
         judged = False  # one LLM judgement per search: ~16 calls for one scene were possible
-        for query in fallback_queries(base, subject):
-            candidates: list[Candidate] = []
-            for client in self.clients:
-                try:
-                    candidates += client.videos(query, self.orientation) if kind == "video" \
-                        else client.photos(query, self.orientation)
-                except httpx.HTTPError as e:
-                    log.warning("%s search failed for %r: %s", client.source, query, e)
+        for round_queries in rounds:
+            found: dict[str, tuple[Candidate, str]] = {}
+            for query in round_queries:
+                for client in self.clients:
+                    try:
+                        hits = client.videos(query, self.orientation) if kind == "video" \
+                            else client.photos(query, self.orientation)
+                    except httpx.HTTPError as e:
+                        log.warning("%s search failed for %r: %s", client.source, query, e)
+                        continue
+                    for c in hits:
+                        found.setdefault(c.uid, (c, query))
             # compare page urls too: assets saved before uids existed only carry the url
-            fresh = [c for c in candidates if c.uid not in self.used and c.page_url not in self.used]
-            rated = sorted(((relevance(c, query_words, subject), score(c, self.orientation, seconds), c)
-                            for c in fresh), key=lambda t: (t[0], t[1]), reverse=True)
+            fresh = [(c, q) for c, q in found.values()
+                     if c.uid not in self.used and c.page_url not in self.used and not is_junk(c)]
+
+            def rel(c: Candidate, q: str) -> int:  # against the query that found it
+                words = content_words(q)
+                return relevance(c, words, self.subject if self.subject in words else None)
+
+            rated = sorted(((rel(c, q), score(c, self.orientation, seconds), c, q) for c, q in fresh),
+                           key=lambda t: (t[0], t[1]), reverse=True)
             if strict:
                 rated = [t for t in rated if t[0] >= 1]
-            ranked = [c for _, _, c in rated]
+            ranked = [c for _, _, c, _ in rated]
+            query_of = {c.uid: q for _, _, c, q in rated}
             if not ranked:
                 continue
             # weak match (the best clip misses several query words, e.g. "man eating pizza at his computer
             # screen" for "computer screen showing malware"): let the LLM read the narration and choose
-            matched = rated[0][0] - (1 if subject else 0)
-            weak = matched < max(2, len(query_words) - 1)
+            best_words = content_words(rated[0][3])
+            matched = rated[0][0] - (1 if self.subject in best_words else 0)
+            weak = matched < max(2, len(best_words) - 1)
             if self.judge and weak and len(ranked) > 1 and not judged:
                 judged = True
                 top = ranked[:JUDGE_TOP]
@@ -251,7 +277,7 @@ class Selector:
                 long_scene = self.pool is not None and seconds > EXTRA_AFTER
                 extra = next((c for c in ranked if c.kind == kind), None) if long_scene else None
                 rest = [c for c in ranked if c is not extra]
-                asset = self._use(scene, best, query, rest[:MAX_ALTERNATES])
+                asset = self._use(scene, best, query_of[best.uid], rest[:MAX_ALTERNATES])
                 if asset and extra is not None:
                     self._use_extra(scene, asset, extra)
                 if asset:

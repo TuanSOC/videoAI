@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: Queries And Thumbnails
-status: in-progress
+status: completed
 priority: P1
 effort: 3h
 dependencies: []

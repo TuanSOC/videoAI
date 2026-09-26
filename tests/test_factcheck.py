@@ -96,3 +96,10 @@ def test_fact_check_batches_long_scripts():
     llm = Fake({"issues": []})
     fact_check(long_script, [SRC], LLMChain([llm]))
     assert len(llm.prompts) == 3 and "60. Câu 60." in llm.prompts[2] and "26." not in llm.prompts[0]
+
+
+def test_rewrite_keeps_only_english_alt_queries():
+    llm = Fake({"narration": "Mới.", "visual_query": "octopus den", "alt_queries": ["hang đá", "octopus arm close up"],
+                "visual_type": "stock", "ai_prompt": ""})
+    out = writer.rewrite_one(SCRIPT, SCRIPT.scenes[0], "", "", None, [SRC], None, LLMChain([llm]))
+    assert out.alt_queries == ["octopus arm close up"]

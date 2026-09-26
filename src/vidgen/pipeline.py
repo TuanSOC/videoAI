@@ -245,7 +245,7 @@ def rewrite_scene(out_dir: Path, s: Settings, scene_id: int, narration: str | No
     prev = script.scenes[idx - 1].narration if idx > 0 else ""
     nxt = script.scenes[idx + 1].narration if idx + 1 < len(script.scenes) else ""
     new = rewrite_one(script, scene, prev, nxt, instruction, sources, angle, default_chain(s))
-    return {"narration": new.narration, "visual_query": new.visual_query}
+    return {"narration": new.narration, "visual_query": new.visual_query, "alt_queries": new.alt_queries}
 
 
 BRIEF_FILE = "brief.json"
