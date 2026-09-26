@@ -18,6 +18,8 @@ from pydantic import BaseModel, ValidationError
 log = logging.getLogger(__name__)
 IMAGE_SIDE = 384       # longest side after shrinking: ~250 image tokens each instead of ~1000
 TIMEOUT = 120          # the first call also loads the model
+TIMEOUT_LOADED = 45    # later calls: the model is in VRAM already
+MAX_FAILURES = 2       # consecutive failures before the judge gives up for this video
 KEEP_ALIVE = "3m"      # stay loaded between scenes
 
 PROMPT = """You choose stock footage for one scene of a short video.
@@ -47,11 +49,15 @@ def _shrink(image: bytes) -> bytes | None:
 
 
 class VisionJudge:
-    def __init__(self, url: str, model: str, http: httpx.Client | None = None):
+    def __init__(self, url: str, model: str, http: httpx.Client | None = None, unload_first: str | None = None):
         self.url = url.rstrip("/")
         self.model = model
-        self.http = http or httpx.Client(timeout=TIMEOUT)
-        self.disabled = False  # set once the model turns out to be missing: don't ask for every scene
+        self.http = http or httpx.Client()
+        self.unload_first = unload_first  # model to free from VRAM before this one loads
+        self.used = False       # a request was sent (the model may be loaded)
+        self.loaded = False     # it answered at least once
+        self.failures = 0
+        self.disabled = False   # model missing or keeps failing: stop asking for every scene
 
     def score(self, narration: str, queries: list[str], images: list[bytes]) -> list[int] | None:
         """One 0-10 score per image, or None (no opinion)."""
@@ -61,6 +67,9 @@ class VisionJudge:
         if any(s is None for s in small):
             return None
         prompt = PROMPT.format(narration=narration, queries=", ".join(f'"{q}"' for q in queries), n=len(images))
+        if not self.used and self.unload_first:
+            unload(self.url, self.unload_first, http=self.http)
+        self.used = True
         try:
             resp = self.http.post(f"{self.url}/api/chat", json={
                 "model": self.model,
@@ -70,10 +79,10 @@ class VisionJudge:
                 "stream": False,
                 "keep_alive": KEEP_ALIVE,
                 "options": {"temperature": 0, "num_ctx": 8192},
-            })
+            }, timeout=TIMEOUT_LOADED if self.loaded else TIMEOUT)
         except httpx.HTTPError as e:
             log.warning("vision judge unavailable: %s", e)
-            return None
+            return self._failed()
         if resp.status_code != 200:
             if "not found" in resp.text:
                 self.disabled = True
@@ -81,16 +90,26 @@ class VisionJudge:
                             self.model, self.model)
             else:
                 log.warning("vision judge error %s: %s", resp.status_code, resp.text[:200])
-            return None
+            return self._failed()
+        self.loaded = True
         try:
             scores = VisionScores.model_validate_json(resp.json()["message"]["content"]).scores
         except (ValidationError, KeyError, ValueError) as e:
             log.warning("vision judge gave an unreadable answer: %s", e)
-            return None
+            return self._failed()
         if len(scores) != len(images) or any(not 0 <= s <= 10 for s in scores):
             log.warning("vision judge returned %s for %d images", scores, len(images))
-            return None
+            return self._failed()
+        self.failures = 0
         return scores
+
+    def _failed(self) -> None:
+        """No opinion this time; after MAX_FAILURES in a row (OOM, stuck Ollama) stop asking."""
+        self.failures += 1
+        if self.failures >= MAX_FAILURES and not self.disabled:
+            self.disabled = True
+            log.warning("vision judge failed %d times in a row — using text matching for the rest", self.failures)
+        return None
 
 
 def unload(url: str, model: str, http: httpx.Client | None = None) -> None:

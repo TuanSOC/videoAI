@@ -6,6 +6,7 @@ No pop-in or zoomed keywords: they read as busy. Long: 2-line chunks balanced by
 unit, don't strand one word before a full stop. Positions keep clear of TikTok/Shorts/Reels UI.
 """
 
+import logging
 import re
 import warnings
 from collections import Counter
@@ -13,6 +14,7 @@ from collections import Counter
 from vidgen.config import FormatPreset
 from vidgen.models import Script, Timeline, WordTiming
 
+log = logging.getLogger(__name__)
 FONT = "Be Vietnam Pro"
 # ASS colours are &HAABBGGRR
 WHITE, YELLOW, CYAN, BLACK = "&H00FFFFFF", "&H0000E5FF", "&H00F5D65C", "&H00000000"
@@ -189,7 +191,12 @@ def compound_pairs(script: Script) -> set[tuple[str, str]]:
     glue = {p for p, n in pairs.items() if n >= 2}
     tokenize = _vi_tokenizer()
     for scene in script.scenes if tokenize else ():
-        for word in tokenize(scene.narration).split():
+        try:
+            segmented = tokenize(scene.narration)
+        except Exception as e:  # a broken segmenter must not fail the render: repeated pairs still apply
+            log.warning("Vietnamese word segmentation failed: %s", e)
+            break
+        for word in segmented.split():
             syllables = [_bare(s) for s in word.split("_")]
             # pyvi sometimes merges two words ("thực_hiện_hành_động"); most Vietnamese words have two
             # syllables, so glue pairwise and leave the boundary between pairs breakable
@@ -202,7 +209,8 @@ def _vi_tokenizer():
         with warnings.catch_warnings():  # pyvi's regexes trigger SyntaxWarnings on first import
             warnings.simplefilter("ignore")
             from pyvi import ViTokenizer
-    except ImportError:
+    except Exception as e:  # not installed, or its model fails to load
+        log.warning("Vietnamese word segmenter unavailable (%s): compound words may be split", e)
         return None
     return ViTokenizer.tokenize
 

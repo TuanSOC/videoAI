@@ -37,6 +37,11 @@ def no_real_llm(monkeypatch):
     from vidgen import pipeline
     monkeypatch.setattr(pipeline, "write_brief", fake_brief)
     monkeypatch.setattr(pipeline, "split_topics", lambda text, lang, s: [ln for ln in text.splitlines() if ln])
+    # clip swaps: no vision judge, no text judge (both would talk to the local Ollama)
+    from vidgen.visuals import selector, vision
+    monkeypatch.setattr(selector, "vision_judge", lambda s: None)
+    monkeypatch.setattr(selector, "llm_judge", lambda s: None)
+    monkeypatch.setattr(vision, "unload", lambda *a, **k: None)
 
 
 @pytest.fixture

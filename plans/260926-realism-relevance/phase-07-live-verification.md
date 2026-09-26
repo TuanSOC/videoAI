@@ -40,3 +40,17 @@ regression check; commit; restart server only when `/api/videos` shows no runnin
 ## Risk Assessment
 - Pexels content varies per run; judge relevance by vision scores + manual contact-sheet review, not by
   exact clip ids.
+
+## Results (2026-09-26, phishing short, vi)
+| Criterion | Before | After (run -3) |
+|---|---|---|
+| Inter-scene silence | 1.0–1.4 s | max 0.33 s ✅ |
+| Subtitles | 1–3 words, pop/zoom | 48 events, all ≤26 chars, 3–6 words (or short sentence) ✅; 1 unavoidable function-word end in a 12-word sentence |
+| Clips | green screen, bare palm, cash, calculator | 10/12 vision-scored (one 10/10, four 8/10, rest 5); no junk; 2 weak (calculator phone 5, letter board image unscored) ⚠️ |
+| Pipeline time | 105 s | 235 s (+130 s, budget +240 s) ✅ |
+| Length | 57 s | 52 s after WPS recalibration (run -2 was 33 s at old WPS) ✅ |
+| Music | none | mood "tense" tagged; plays once tracks are added to assets/music/tense/ |
+
+Live-run fixes: adjectives excluded from subject, no unjudged strict picks after the judge answered,
+MIN_VISION 6 / MIN_FALLBACK 3 / 3 calls, quote-aware sentence ends, WPS vi 3.9 (en 3.0 unmeasured).
+Remaining: image steps can run out of judge calls (seen: letter-board image); acceptable, user can swap.

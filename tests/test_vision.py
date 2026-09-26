@@ -19,12 +19,13 @@ def jpeg(w=1280, h=720, color=(40, 80, 120)) -> bytes:
     return cv2.imencode(".jpg", img)[1].tobytes()
 
 
-def ollama(reply: dict | None = None, status=200, seen: list | None = None):
+def ollama(reply: dict | None = None, status=200, seen: list | None = None,
+           error="model 'qwen2.5vl:7b' not found"):
     def handler(request: httpx.Request):
         if seen is not None:
             seen.append(request)
         if status != 200:
-            return httpx.Response(status, json={"error": "model 'qwen2.5vl:7b' not found"})
+            return httpx.Response(status, json={"error": error})
         return httpx.Response(200, json={"message": {"content": json.dumps(reply)}})
     return httpx.Client(transport=httpx.MockTransport(handler))
 
@@ -152,7 +153,7 @@ def test_vision_calls_capped_per_scene(tmp_path, fake_io):
     judge = FakeVision({"r1": 2, "r2": 3, "r3": 1})
     asset = selector(tmp_path, FakeStock(rounds), judge).pick(
         Scene(id=1, narration="n", visual_query="old ship wreck underwater"), 5)
-    assert len(judge.calls) <= sel.VISION_CALLS_PER_SCENE
+    assert len(judge.calls) <= 2 * sel.VISION_CALLS_PER_KIND
     assert asset.uid in {"r1", "r2", "r3"}
 
 
@@ -178,3 +179,94 @@ def test_hopeless_scores_fall_through_to_next_step(tmp_path, fake_io):
     judge = FakeVision({"v": 1, "p": 8})
     asset = selector(tmp_path, stock, judge).pick(Scene(id=1, narration="n", visual_query="ocean waves"), 5)
     assert asset.uid == "p"
+
+
+# --- review findings -------------------------------------------------------------------------------
+def test_rejected_clips_never_come_back_and_a_good_image_wins(tmp_path, fake_io):
+    q = "ship wreck"
+    stock = FakeStock({q: [tc("r1", q), tc("r2", q), tc("r3", q), tc("p1", q, kind="image")]})
+    asset = selector(tmp_path, stock, FakeVision({"r1": 1, "r2": 2, "r3": 0, "p1": 9})).pick(
+        Scene(id=1, narration="n", visual_query=q), 5)
+    assert asset.uid == "p1" and asset.vision_score == 9
+
+
+def test_weak_video_waits_for_the_image_step(tmp_path, fake_io):
+    q = "ship wreck"
+    stock = FakeStock({q: [tc("v", q), tc("p", q, kind="image")]})
+    asset = selector(tmp_path, stock, FakeVision({"v": 4, "p": 8})).pick(Scene(id=1, narration="n", visual_query=q), 5)
+    assert asset.uid == "p"
+
+
+def test_weak_clip_used_when_nothing_better(tmp_path, fake_io):
+    q = "ship wreck"
+    asset = selector(tmp_path, FakeStock({q: [tc("v", q)]}), FakeVision({"v": 4})).pick(
+        Scene(id=1, narration="n", visual_query=q), 5)
+    assert asset.uid == "v" and asset.vision_score == 4
+
+
+def test_hopeless_clip_never_used_even_as_last_resort(tmp_path, fake_io):
+    q = "ship wreck"
+    asset = selector(tmp_path, FakeStock({q: [tc("v", q)]}), FakeVision({"v": 0})).pick(
+        Scene(id=1, narration="n", visual_query=q), 5)
+    assert asset.kind == "color"
+
+
+def test_bad_thumbnail_is_not_cached_or_sent(tmp_path):
+    def handler(request):
+        if request.url.path.endswith("bad.jpg"):
+            return httpx.Response(200, text="<html>not found</html>")
+        return httpx.Response(200, content=jpeg(64, 64))
+    s = sel.Selector([], None, get_settings().preset("short"), tmp_path, tmp_path / "cache",
+                     http=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert s._thumb("https://img/bad.jpg") is None and not (tmp_path / "cache" / "thumbs").exists()
+    assert s._thumb("https://img/good.jpg") is not None
+
+
+def test_first_comma_idea_is_searched_on_its_own(tmp_path, fake_io):
+    stock = FakeStock({"ship wreck": [tc("w", "ship wreck")]})
+    asset = selector(tmp_path, stock, None).pick(Scene(id=1, narration="n", visual_query="ship wreck, coral reef"), 5)
+    assert asset.uid == "w"
+
+
+def test_judge_gives_up_after_repeated_failures():
+    seen = []
+    judge = vision.VisionJudge("http://ollama", "m", http=ollama(status=500, seen=seen, error="CUDA out of memory"))
+    for _ in range(4):
+        assert judge.score("n", ["q"], [jpeg()]) is None
+    assert len(seen) == vision.MAX_FAILURES and judge.disabled
+
+
+def test_script_model_unloaded_once_before_first_judgement():
+    seen = []
+    judge = vision.VisionJudge("http://ollama", "vl", http=ollama({"scores": [7]}, seen=seen), unload_first="qwen3:8b")
+    assert not judge.used
+    judge.score("n", ["q"], [jpeg()])
+    judge.score("n", ["q"], [jpeg()])
+    paths = [r.url.path for r in seen]
+    assert paths == ["/api/generate", "/api/chat", "/api/chat"] and judge.used
+
+
+def test_vision_session_unloads_only_if_used(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(vision, "unload", lambda url, model, http=None: calls.append(model))
+    s = get_settings()
+    sel_ = sel.Selector([], None, s.preset("short"), tmp_path, tmp_path,
+                        vision=vision.VisionJudge("http://x", "vl"))
+    with sel.vision_session(sel_, s):
+        pass
+    assert calls == []
+    sel_.vision.used = True
+    with sel.vision_session(sel_, s):
+        pass
+    assert calls == [s.pipeline.vision.model]
+
+
+def test_text_judge_kept_as_backup_when_vision_enabled(monkeypatch, tmp_path):
+    s = get_settings()
+    monkeypatch.setattr(sel, "llm_judge", lambda st: "text-judge")
+    monkeypatch.setattr(sel, "stock_clients", lambda st: [])
+    from vidgen.models import Script
+    script = Script(title="t", hook="h", lang="vi", format="short", scenes=[Scene(id=1, narration="n", visual_query="q")])
+    monkeypatch.setattr("vidgen.visuals.comfy.ComfyClient.available", lambda self: False)
+    selector_ = sel.build_selector(script, s.preset("short"), tmp_path, s)
+    assert selector_.judge == "text-judge" and selector_.vision is not None

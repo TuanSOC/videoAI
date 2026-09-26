@@ -333,3 +333,12 @@ def test_sentence_end_inside_quotes():
     chunks = [[x.word for x in c] for c in subs.short_chunks(ws(*"Hỏi: 'Email này có thật không?' Rồi kiểm tra lại.".split()))]
     k = next(i for i, c in enumerate(chunks) if c[-1] == "không?'")   # the quoted question ends a phrase
     assert chunks[k + 1][0] == "Rồi" and chunks[-1][-1] == "lại."
+
+
+def test_broken_segmenter_falls_back_to_repeated_pairs(monkeypatch):
+    def boom(text):
+        raise RuntimeError("model file corrupt")
+    monkeypatch.setattr(subs, "_vi_tokenizer", lambda: boom)
+    script = Script(title="t", hook="h", lang="vi", format="short", scenes=[
+        Scene(id=1, narration="Đổi mật khẩu. Mật khẩu mạnh.", visual_query="q")])
+    assert subs.compound_pairs(script) == {("mật", "khẩu")}

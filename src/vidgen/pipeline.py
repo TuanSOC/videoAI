@@ -344,10 +344,9 @@ def swap_clip(out_dir: Path, s: Settings, scene_id: int, query: str | None = Non
     if scene is None or current is None:
         raise KeyError(f"scene {scene_id} not found")
     seconds = next((sa.duration for sa in Job(out_dir, s).read_timeline().scenes if sa.scene_id == scene_id), 5.0)
-    vision = vision_judge(s)
     selector = Selector(stock_clients(s), None, s.preset(script.format), out_dir, s.path(s.pipeline.cache_dir),
                         subject=video_subject([sc.visual_query for sc in script.scenes]),
-                        judge=None if vision else llm_judge(s), vision=vision)
+                        judge=llm_judge(s), vision=vision_judge(s))
     used = {x for a in assets for x in (a.uid, a.url) if x}
     with vision_session(selector, s):
         new = selector.swap(scene, seconds, current, used, query)

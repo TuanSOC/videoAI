@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -56,7 +56,8 @@ class PipelineConfig(BaseModel):
     cache_dir: Path = Path("cache")
     formats: dict[str, FormatPreset]
     voices: dict[str, str]
-    voice_rate: str = "+8%"  # edge-tts speaking rate; the default pace sounds slow for short videos
+    # edge-tts speaking rate ("+8%", "-5%"); the default pace sounds slow for short videos
+    voice_rate: str = Field("+8%", pattern=r"^[+-]\d{1,2}%$")
     llm: LLMConfig = LLMConfig()
     vision: VisionConfig = VisionConfig()
     research: bool = True  # ground scripts in Wikipedia passages (script/research.py)

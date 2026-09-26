@@ -63,3 +63,15 @@ def test_doctor_requires_some_llm(monkeypatch):
     checks = {c.name: c for c in doctor.run_checks(s)}
     assert "ollama pull" in checks["Ollama"].detail
     assert not checks["LLM available"].ok and checks["LLM available"].required
+
+
+def test_voice_rate_must_be_signed_percent():
+    import pytest
+    from pydantic import ValidationError
+
+    from vidgen.config import PipelineConfig
+
+    base = {"formats": {}, "voices": {}}
+    assert PipelineConfig(**base, voice_rate="-5%").voice_rate == "-5%"
+    with pytest.raises(ValidationError):
+        PipelineConfig(**base, voice_rate="8%")

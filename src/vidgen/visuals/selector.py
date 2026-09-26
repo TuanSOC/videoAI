@@ -33,7 +33,7 @@ EXTRA_AFTER = 5.0  # seconds: longer scenes also get their next-best clip, cut i
 VISION_TOP = 5     # thumbnails shown to the vision judge per search round
 MIN_VISION = 6     # below this the clip only illustrates loosely: keep looking
 MIN_FALLBACK = 3   # a loose match still beats a placeholder; below this it doesn't
-VISION_CALLS_PER_SCENE = 3
+VISION_CALLS_PER_KIND = 2   # judge calls per scene for videos, and again for images
 IMAGE_PENALTY = 1  # a still image scores one point below an equally good video
 
 
@@ -115,6 +115,13 @@ OFF_CONTEXT = {stem(w) for w in """dish dishes food meal plate cooking cooked co
 JUNK = ("green screen", "greenscreen", "chroma key", "chromakey", "mockup", "mock up", "template")
 
 
+def is_image(data: bytes) -> bool:
+    import cv2
+    import numpy as np
+
+    return bool(data) and cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_REDUCED_GRAYSCALE_8) is not None
+
+
 def is_junk(c: Candidate | Alternate) -> bool:
     text = c.text.lower().replace("-", " ")
     return any(j in text for j in JUNK)
@@ -189,15 +196,32 @@ class Selector:
         self.subject = subject  # what the whole video is about, see video_subject()
         self.judge = judge      # optional LLM tie-breaker for weak matches
         self.vision = vision    # optional vision judge (visuals/vision.py): scores thumbnails
-        self.vision_calls = 0
-        self.vision_ok = False  # the vision judge has answered for the current scene
+        self._new_scene()
         self.pool: ThreadPoolExecutor | None = None  # set while sourcing a whole video
         self.pending: list[tuple[Scene, Asset, Future]] = []
         self.extra_pending: list[tuple[Asset, str, Future]] = []
 
+    def _new_scene(self) -> None:
+        """Vision state is per scene: budget, whether the judge answered, clips it rejected, and the best
+        loosely-matching clip (used only once nothing better turned up in any step)."""
+        self.vision_calls: dict[str, int] = {"video": 0, "image": 0}
+        self.vision_ok = False
+        self.vision_rejected: set[str] = set()
+        self.weak: tuple[int, Candidate, str, int] | None = None  # (adjusted, clip, query, raw score)
+
+    def _take_weak(self, scene: Scene) -> Asset | None:
+        if self.weak is None:
+            return None
+        _, c, query, raw_score = self.weak
+        self.weak = None
+        asset = self._use(scene, c, query, [])
+        if asset:
+            asset.vision_score = raw_score
+        return asset
+
     def pick(self, scene: Scene, seconds: float) -> Asset:
         self.visuals_dir.mkdir(parents=True, exist_ok=True)
-        self.vision_calls, self.vision_ok = 0, False
+        self._new_scene()
         steps: list[Callable[[], Asset | None]] = []
         if scene.visual_type == "ai_video" and self.ai_video_budget > 0:
             steps.append(lambda: self._ai(scene, video=True))
@@ -207,8 +231,10 @@ class Selector:
                   lambda: self._stock(scene, seconds, "image")]
         if scene.visual_type == "stock":
             steps.append(lambda: self._ai(scene, video=False))
-        # nothing relevant anywhere: the closest stock clip still beats a flat colour
-        steps += [lambda: self._stock(scene, seconds, "video", strict=False),
+        # nothing good anywhere: a clip the judge found loosely related, then the closest stock clip by
+        # name — both still beat a flat colour
+        steps += [lambda: self._take_weak(scene),
+                  lambda: self._stock(scene, seconds, "video", strict=False),
                   lambda: self._stock(scene, seconds, "image", strict=False)]
         for step in steps:
             asset = step()
@@ -243,9 +269,10 @@ class Selector:
         subject = self.subject if self.subject in content_words(base) else None
         # first all of the scene's queries together (the same moment filmed differently), then shorter
         # forms of the main one: stock search is literal and misses on long phrases
-        rounds = [queries] + [[q] for q in fallback_queries(base, subject)[1:]]
+        # (comma lists: the first idea on its own, as fallback_queries splits them)
+        shorter = fallback_queries(base, subject)
+        rounds = [[shorter[0], *queries[1:]]] + [[q] for q in shorter[1:]]
         judged = False  # one LLM judgement per search: ~16 calls for one scene were possible
-        fallback: tuple[int, Candidate, str, int] | None = None  # best poorly-scored clip seen
         for round_queries in rounds:
             found: dict[str, tuple[Candidate, str]] = {}
             for query in round_queries:
@@ -260,7 +287,8 @@ class Selector:
                         found.setdefault(c.uid, (c, query))
             # compare page urls too: assets saved before uids existed only carry the url
             fresh = [(c, q) for c, q in found.values()
-                     if c.uid not in self.used and c.page_url not in self.used and not is_junk(c)]
+                     if c.uid not in self.used and c.page_url not in self.used and not is_junk(c)
+                     and c.uid not in self.vision_rejected]
 
             def rel(c: Candidate, q: str) -> int:  # against the query that found it
                 words = content_words(q)
@@ -274,7 +302,7 @@ class Selector:
             query_of = {c.uid: q for _, _, c, q in rated}
             if not ranked:
                 continue
-            seen = self._vision_scores(scene, queries, ranked)
+            seen = self._vision_scores(scene, queries, ranked, kind)
             raw: dict[str, int] = {}
             if seen is None and self.vision_ok and strict:
                 # the model has been judging this scene but can't look at these (budget spent, no
@@ -285,11 +313,14 @@ class Selector:
                 raw, adjusted = seen
                 good = sorted((c for c in ranked if adjusted.get(c.uid, -1) >= MIN_VISION),
                               key=lambda c: -adjusted[c.uid])
+                # hopeless clips stay out for the rest of this scene, in every step
+                self.vision_rejected |= {uid for uid, a in adjusted.items() if a < MIN_FALLBACK}
                 if not good:
                     best_low = max((c for c in ranked if c.uid in adjusted), key=lambda c: adjusted[c.uid])
-                    if adjusted[best_low.uid] >= MIN_FALLBACK and (fallback is None or adjusted[best_low.uid] > fallback[0]):
-                        fallback = (adjusted[best_low.uid], best_low, query_of[best_low.uid], raw[best_low.uid])
-                    if strict:
+                    low = adjusted[best_low.uid]
+                    if low >= MIN_FALLBACK and (self.weak is None or low > self.weak[0]):
+                        self.weak = (low, best_low, query_of[best_low.uid], raw[best_low.uid])
+                    if strict or low < MIN_FALLBACK:
                         continue  # nothing good in this round: a simpler query may find better
                     good = [best_low]
                 # clips the model scored low are neither used nor offered as swaps
@@ -319,18 +350,12 @@ class Selector:
                 if asset:
                     asset.vision_score = raw.get(best.uid)
                     return asset
-        if fallback is not None:  # only weak matches anywhere: the best of them beats a placeholder
-            _, c, query, raw_score = fallback
-            asset = self._use(scene, c, query, [])
-            if asset:
-                asset.vision_score = raw_score
-            return asset
         return None
 
-    def _vision_scores(self, scene: Scene, queries: list[str],
-                       ranked: list[Candidate]) -> tuple[dict[str, int], dict[str, int]] | None:
+    def _vision_scores(self, scene: Scene, queries: list[str], ranked: list[Candidate],
+                       kind: str) -> tuple[dict[str, int], dict[str, int]] | None:
         """(raw, adjusted) vision scores by uid for the top thumbnails, or None (no judge / no opinion)."""
-        if self.vision is None or self.vision_calls >= VISION_CALLS_PER_SCENE:
+        if self.vision is None or self.vision_calls[kind] >= VISION_CALLS_PER_KIND:
             return None
         shown, images = [], []
         for c in ranked:
@@ -342,7 +367,7 @@ class Selector:
                 images.append(image)
         if not shown:
             return None
-        self.vision_calls += 1
+        self.vision_calls[kind] += 1
         scores = self.vision.score(scene.narration, queries, images)
         if scores is None:
             return None
@@ -353,7 +378,8 @@ class Selector:
         return raw, adjusted
 
     def _thumb(self, url: str) -> bytes | None:
-        """Thumbnail bytes, cached on disk (re-sourcing a video costs no downloads)."""
+        """Thumbnail bytes, cached on disk (re-sourcing a video costs no downloads). Only real images are
+        returned or cached: one HTML error page would make the judge refuse the whole batch."""
         path = self.cache_dir / "thumbs" / f"{hashlib.sha1(url.encode()).hexdigest()}.jpg"
         if path.exists():
             return path.read_bytes()
@@ -362,6 +388,9 @@ class Selector:
             resp.raise_for_status()
         except httpx.HTTPError as e:
             log.debug("thumbnail failed %s: %s", url, e)
+            return None
+        if not is_image(resp.content):
+            log.debug("thumbnail is not an image: %s", url)
             return None
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(resp.content)
@@ -437,7 +466,7 @@ class Selector:
         """Another clip for one scene, never one already used anywhere in the video.
         No query: next saved alternate, else a fresh search on the scene's query. Query: search it."""
         self.visuals_dir.mkdir(parents=True, exist_ok=True)
-        self.vision_calls, self.vision_ok = 0, False
+        self._new_scene()
         # never offer back the current clip nor any clip already swapped away from this scene
         self.used = set(used) | {current.uid, current.url, *current.rejected} - {""}
         rejected = (current.rejected + [current.ident])[-MAX_REJECTED:] if current.ident else current.rejected
@@ -448,6 +477,8 @@ class Selector:
                 alt, pending = pending[0], pending[1:]
                 asset = self._use(scene, alt, current.query or scene.visual_query, pending)
         for strict in (True, False):
+            if not strict and asset is None:
+                asset = self._take_weak(scene)
             for kind in ("video", "image"):
                 if asset is None:
                     asset = self._stock(scene, seconds, kind, query or current.query or scene.visual_query,
@@ -479,32 +510,33 @@ def build_selector(script: Script, preset: FormatPreset, out_dir: Path, s: Setti
         log.warning("no stock API keys and ComfyUI offline — every scene will be a placeholder")
     subject = video_subject([sc.visual_query for sc in script.scenes])
     log.info("video subject for clip matching: %s", subject)
-    vision = vision_judge(s)
-    # the vision judge replaces the text judge: switching models on 8 GB of VRAM for every scene is slow
-    return Selector(clients, ai, preset, out_dir, cache, subject=subject,
-                    judge=None if vision else llm_judge(s), vision=vision)
+    # the text judge stays as a backup: it only runs in a round the vision judge had no opinion on
+    # (model not pulled, Ollama errors), so a missing vision model never makes picking worse
+    return Selector(clients, ai, preset, out_dir, cache, subject=subject, judge=llm_judge(s), vision=vision_judge(s))
 
 
 def vision_judge(s: Settings):
     from vidgen.visuals.vision import VisionJudge
 
-    return VisionJudge(s.secrets.ollama_url, s.pipeline.vision.model) if s.pipeline.vision.enabled else None
+    if not s.pipeline.vision.enabled:
+        return None
+    # the script model is unloaded right before the first image is judged (8 GB of VRAM holds one)
+    return VisionJudge(s.secrets.ollama_url, s.pipeline.vision.model, unload_first=s.pipeline.llm.ollama_model)
 
 
 def vision_session(selector: Selector, s: Settings):
-    """Context: free the script model's VRAM before the vision model loads, and the vision model after."""
+    """Context: after sourcing, free the vision model's VRAM — only if it was actually used (a swap
+    that takes a saved alternate never loads it, and must not unload it under another job)."""
     from contextlib import contextmanager
 
     from vidgen.visuals.vision import unload
 
     @contextmanager
     def session():
-        if selector.vision is not None:
-            unload(s.secrets.ollama_url, s.pipeline.llm.ollama_model)
         try:
             yield
         finally:
-            if selector.vision is not None:
+            if selector.vision is not None and selector.vision.used:
                 unload(s.secrets.ollama_url, s.pipeline.vision.model)
 
     return session()
