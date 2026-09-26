@@ -32,6 +32,20 @@ def video_encoder() -> tuple[str, ...]:
         return ("-c:v", "libx264", "-preset", "veryfast", "-crf", "20")
 
 
+def mean_volume(path: Path) -> float | None:
+    """Mean level in dBFS (ffmpeg volumedetect), or None if it can't be measured."""
+    proc = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-af", "volumedetect",
+                           "-vn", "-f", "null", "-"],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+    for line in proc.stderr.splitlines():
+        if "mean_volume:" in line:
+            try:
+                return float(line.split("mean_volume:")[1].split("dB")[0])
+            except ValueError:
+                return None
+    return None
+
+
 def duration(path: Path) -> float:
     proc = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],

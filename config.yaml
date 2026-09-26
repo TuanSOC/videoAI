@@ -32,6 +32,12 @@ vision:
   enabled: true
   model: qwen2.5vl:7b
 
+# automatic sound effects (whoosh at dissolves, impact on the hook/shock words, pop on numbers);
+# sounds are synthesised into assets/sfx/ — drop your own files there to replace them
+sfx:
+  enabled: true
+  density: subtle   # minimal | subtle | dense
+
 # fetch Wikipedia passages about the topic and restrict the script's facts to them
 research: true
 

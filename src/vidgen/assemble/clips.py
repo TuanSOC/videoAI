@@ -166,6 +166,16 @@ def shot_args(shot: Shot, nxt: Shot | None, p: FormatPreset, out: Path) -> list[
             "-r", str(p.fps), *ffmpeg.video_encoder(), str(out)]
 
 
+def cut_times(shots: list[Shot], fps: int) -> list[float]:
+    """Seconds at which a scene dissolves into the next (where a whoosh belongs)."""
+    out, frames = [], 0
+    for shot in shots:
+        if shot.transition_in:
+            out.append(round(frames / fps, 3))
+        frames += shot.frames
+    return out
+
+
 def _analyse_all(shots: list[Shot], p: FormatPreset) -> None:
     aspect = p.width / p.height
 
@@ -178,7 +188,8 @@ def _analyse_all(shots: list[Shot], p: FormatPreset) -> None:
 
 
 def render_segments(assets: list[Asset], timeline: Timeline, p: FormatPreset, out_dir: Path,
-                    fmt: str = "short") -> list[Path]:
+                    fmt: str = "short") -> tuple[list[Path], list[float]]:
+    """Segment files in order, and the dissolve cut times (for sound design)."""
     seg_dir = out_dir / "segments"
     seg_dir.mkdir(exist_ok=True)
     for old in seg_dir.glob("seg_*.mp4"):  # shot count can differ from a previous render
@@ -200,7 +211,7 @@ def render_segments(assets: list[Asset], timeline: Timeline, p: FormatPreset, ou
 
     with ThreadPoolExecutor(WORKERS) as pool:
         list(pool.map(render, jobs))
-    return [j[2] for j in jobs]
+    return [j[2] for j in jobs], cut_times(shots, p.fps)
 
 
 def _safe_duration(path: Path) -> float:

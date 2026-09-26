@@ -91,8 +91,9 @@ def _render(job: Job) -> None:
 
     script = job.read_script()
     assets = job.read_assets()
+    sfx = job.settings.pipeline.sfx
     render_video(script, job.read_timeline(), assets, job.settings.preset(script.format),
-                 job.out_dir, seed=job.out_dir.name)
+                 job.out_dir, seed=job.out_dir.name, sfx_density=sfx.density if sfx.enabled else None)
     meta_path = job.out_dir / "metadata.json"
     if meta_path.exists():  # re-render after a clip swap: keep the LLM text, refresh footage credits
         from vidgen.metadata import Metadata, rebuild_description, save_metadata
@@ -122,7 +123,7 @@ def _metadata(job: Job) -> None:
 STAGES = [
     Stage("voice", "timeline.json", ("voice", "voice.wav"), _voice),
     Stage("visuals", "assets.json", ("visuals", "thumbs"), _visuals),
-    Stage("render", "final.mp4", ("segments", "subs.ass", "fonts", "music.json"), _render),
+    Stage("render", "final.mp4", ("segments", "subs.ass", "fonts", "music.json", "sfx.json", "sfx.wav"), _render),
     Stage("metadata", "metadata.json", (), _metadata),
 ]
 STAGE_NAMES = [st.name for st in STAGES]

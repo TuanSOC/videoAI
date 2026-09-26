@@ -38,6 +38,11 @@ class VisionConfig(BaseModel):
     model: str = "qwen2.5vl:7b"    # "qwen2.5vl:3b" is faster and lighter, less accurate
 
 
+class SfxConfig(BaseModel):
+    enabled: bool = True
+    density: Literal["minimal", "subtle", "dense"] = "subtle"
+
+
 class WhisperConfig(BaseModel):
     model: str = "small"
     device: str = "cuda"
@@ -60,6 +65,7 @@ class PipelineConfig(BaseModel):
     voice_rate: str = Field("+8%", pattern=r"^[+-]\d{1,2}%$")
     llm: LLMConfig = LLMConfig()
     vision: VisionConfig = VisionConfig()
+    sfx: SfxConfig = SfxConfig()
     research: bool = True  # ground scripts in Wikipedia passages (script/research.py)
     ai: AIConfig = AIConfig()
     whisper: WhisperConfig = WhisperConfig()
