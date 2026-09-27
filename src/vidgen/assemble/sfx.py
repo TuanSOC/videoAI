@@ -34,7 +34,8 @@ FOLDERS = {"whoosh": "whooshes", "impact": "impacts", "pop": "pops"}
 PRIORITY = ("impact", "whoosh", "pop")      # who wins when two cues collide
 log = logging.getLogger(__name__)
 VARIANTS = 3
-SYNTH = "synth2_"      # generated files; older synth_* ones (unnormalised, far too quiet) are replaced
+SYNTH = "synth2_"      # generated files...
+OLD_SYNTH = ("synth_",)  # ...and earlier generations (unnormalised, far too quiet), replaced when found
 MIN_GAP = 0.6          # seconds between any two cues
 SAMPLE_RATE = 48000
 SOURCE_PEAK_DB = -3.0  # every library sound is normalised to this peak...
@@ -183,9 +184,11 @@ def ensure_library(root: Path) -> dict[str, list[Path]]:
         d = root / folder
         d.mkdir(parents=True, exist_ok=True)
         files = sorted(p for p in d.iterdir() if p.suffix.lower() in AUDIO_EXTS)
-        for stale in (p for p in files if p.name.startswith("synth") and not p.name.startswith(SYNTH)):
+        # exactly the names this module generates: a user's "synthwave_hit.wav" is theirs, never deleted
+        ours = {f"{prefix}{kind}_{k + 1}.wav" for prefix in (SYNTH, *OLD_SYNTH) for k in range(VARIANTS)}
+        for stale in (p for p in files if p.name in ours and not p.name.startswith(SYNTH)):
             stale.unlink(missing_ok=True)
-        mine = [p for p in files if not p.name.startswith("synth")]
+        mine = [p for p in files if p.name not in ours]
         usable = [p for p in mine if _usable(p)]
         for bad in set(mine) - set(usable):
             log.warning("sfx: skipping unreadable file %s", bad)

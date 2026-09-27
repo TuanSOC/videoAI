@@ -293,3 +293,15 @@ def test_swap_searches_the_scene_queries_and_avoids_extra_clips(tmp_path, monkey
     s = sel.Selector([stock], None, get_settings().preset("short"), tmp_path, tmp_path / "c")
     new = s.swap(scene, 5, current, sel.used_ids([current, other]))
     assert "hacker at laptop" in seen and new.uid == "new"
+
+
+@needs_ffmpeg
+def test_user_sounds_named_synth_are_never_deleted(tmp_path):
+    from vidgen.assemble import sfx
+    lib = sfx.ensure_library(tmp_path)
+    mine = tmp_path / sfx.FOLDERS["whoosh"] / "synthwave_hit.wav"
+    shutil.copy(lib["whoosh"][0], mine)
+    old = tmp_path / sfx.FOLDERS["whoosh"] / "synth_whoosh_1.wav"      # a first-version generated file
+    shutil.copy(lib["whoosh"][0], old)
+    assert sfx.ensure_library(tmp_path)["whoosh"] == [mine]
+    assert mine.exists() and not old.exists()
