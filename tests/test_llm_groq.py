@@ -132,3 +132,91 @@ def test_config_rejects_unknown_providers_and_the_old_key():
         LLMConfig(creative=["groq"])                       # groq needs a model
     with pytest.raises(ValidationError):
         LLMConfig(providers=["ollama"])
+
+
+# --- prompt tiers ------------------------------------------------------------------------------------------
+class Strong:
+    tier = "strong"
+
+    def __init__(self, fail=False, answer=None):
+        self.name, self.fail, self.answer, self.prompts = "groq:x", fail, answer, []
+
+    def generate_json(self, prompt, schema):
+        self.prompts.append(prompt)
+        if self.fail:
+            raise L.LLMError("down")
+        return json.dumps(self.answer)
+
+
+def test_each_provider_gets_the_prompt_for_its_tier():
+    strong, local = Strong(fail=True), Local()
+    L.LLMChain([strong, local]).generate(lambda tier: f"<{tier}>", Out)
+    assert strong.prompts == ["<strong>"] and local.prompts == ["<base>"]   # the 8B never sees the rich prompt
+    assert L.LLMChain([Local()]).generate("plain", Out).hook == "local"     # plain strings still work
+
+
+def test_strong_prompt_file_wins_only_for_strong_and_only_when_it_exists():
+    from vidgen.script.templates import PROMPTS, render
+    base = render("factcheck.md", facts="F", lang_name="Vietnamese", scenes="1. x")
+    assert render("factcheck.md", tier="strong", facts="F", lang_name="Vietnamese", scenes="1. x") == base
+    assert (PROMPTS / "strong" / "short.md").exists()
+
+
+def test_strong_prompts_need_no_value_the_base_call_lacks():
+    import re
+
+    from vidgen.script.templates import PROMPTS
+
+    def placeholders(p):
+        return set(re.findall(r"\$(\w+)", p.read_text(encoding="utf-8")))
+    strong = list((PROMPTS / "strong").glob("*.md"))
+    assert {p.name for p in strong} >= {"short.md", "brief_angles.md", "long_outline.md", "long_chapter.md",
+                                        "expand.md", "rewrite_scene.md", "hook_fix.md"}
+    for p in strong:
+        assert placeholders(p) <= placeholders(PROMPTS / p.name) | {"moods"}, p.name
+
+
+def test_writer_sends_the_storytelling_prompt_to_a_strong_model():
+    from vidgen.script import writer
+    draft = {"title": "T", "hook": "Một lỗi Windows làm tê liệt bệnh viện.", "mood": "tense",
+             "open_loop": "Vì sao bản vá có sẵn mà vẫn thua?", "payoff_scene": 3,
+             "scenes": [{"narration": n, "visual_query": "server room", "alt_queries": [], "visual_type": "stock",
+                         "ai_prompt": ""} for n in ("Một lỗi Windows làm tê liệt bệnh viện.",
+                                                    "Vì sao bản vá có sẵn mà vẫn thua?", "Vì máy chưa cập nhật.",
+                                                    "Bạn đã cập nhật chưa?")]}
+    strong = Strong(answer=draft)
+    writer.generate("WannaCry", "short", "vi", get_settings().preset("short"), L.LLMChain([strong]))
+    assert "Storytelling" in strong.prompts[0]
+
+
+def test_strong_prompts_keep_every_rule_of_the_base_ones():
+    from vidgen.script.templates import PROMPTS
+    for p in (PROMPTS / "strong").glob("*.md"):
+        strong = p.read_text(encoding="utf-8")
+        rules = [ln for ln in (PROMPTS / p.name).read_text(encoding="utf-8").splitlines()
+                 if ln.lstrip().startswith(("- ", "1.", "2.", "4.", "5.")) and "2-4 concrete" not in ln]
+        assert [r for r in rules if r not in strong] == [], p.name
+
+
+def test_expansion_in_the_wrong_language_is_dropped():
+    from vidgen.script import writer
+
+    class Adds:
+        name, tier = "groq:x", "strong"
+
+        def generate_json(self, prompt, schema):
+            return json.dumps({"new_scenes": [
+                {"narration": "The exploit was leaked in April 2017.", "visual_query": "code", "alt_queries": [],
+                 "visual_type": "stock", "ai_prompt": "", "after": 1},
+                {"narration": "Mã khai thác bị rò rỉ vào tháng 4/2017.", "visual_query": "code", "alt_queries": [],
+                 "visual_type": "stock", "ai_prompt": "", "after": 1}]})
+    scenes = [writer.LLMScene(narration=n, visual_query="q") for n in ("Mở đầu.", "Kết thúc?")]
+    out = writer.expand_scenes(scenes, 40, {"facts": "", "angle": ""}, "vi", L.LLMChain([Adds()]))
+    assert [s.narration for s in out] == ["Mở đầu.", "Mã khai thác bị rò rỉ vào tháng 4/2017.", "Kết thúc?"]
+
+
+def test_typographic_hyphens_and_spaces_are_plain_in_narration():
+    from vidgen.models import Scene
+    from vidgen.script import writer
+    [s] = writer.postprocess([Scene(id=0, narration="Ngày 14\u20114\u20112017, 200\u00a0000 máy.", visual_query="q")], 0)
+    assert s.narration == "Ngày 14-4-2017, 200 000 máy."

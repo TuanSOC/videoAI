@@ -159,12 +159,14 @@ class LLMChain:
         self.last_provider = ""   # who answered the last generate() ("groq:openai/gpt-oss-120b", ...)
         self.fallback = False     # True when that was not the first provider
 
-    def generate(self, prompt: str, schema: type[T]) -> T:
+    def generate(self, prompt: str | Callable[[str], str], schema: type[T]) -> T:
+        """`prompt` may be a function of the provider's tier (templates.prompt): each provider gets its own."""
         errors: list[str] = []
         for provider in self.providers:
+            text = prompt(getattr(provider, "tier", "base")) if callable(prompt) else prompt
             for attempt in range(1, self.retries + 2):
                 try:
-                    raw = provider.generate_json(prompt, schema)
+                    raw = provider.generate_json(text, schema)
                     out = schema.model_validate(json.loads(raw))
                     self.last_provider, self.fallback = provider.name, provider is not self.providers[0]
                     return out

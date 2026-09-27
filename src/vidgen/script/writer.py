@@ -11,7 +11,7 @@ from vidgen.config import LANG_NAMES, Format, FormatPreset, Lang
 from vidgen.models import Angle, Scene, Script, SourceRef, VisualType
 from vidgen.script import hooks
 from vidgen.text import bare, ends_with
-from vidgen.script.templates import render
+from vidgen.script import templates
 from vidgen.script.llm import LLMChain, LLMError
 from vidgen.script.research import Source, facts_block
 
@@ -152,7 +152,7 @@ def expand_scenes(scenes: list[LLMScene], target_words: int, ctx: dict, lang: st
     listing = "\n".join(f"{k}. {s.narration}" for k, s in enumerate(scenes, 1))
     new_count = max(1, round((target_words - current) / WORDS_PER_NEW_SCENE))
     try:
-        added = llm.generate(render("expand.md", scenes=listing, current_words=current,
+        added = llm.generate(templates.prompt("expand.md", scenes=listing, current_words=current,
                                      target_words=target_words, new_scenes=new_count, count=len(scenes),
                                      placement=placement,
                                      lang_name=LANG_NAMES[lang], **ctx), ExpandedScenes).new_scenes
@@ -160,7 +160,9 @@ def expand_scenes(scenes: list[LLMScene], target_words: int, ctx: dict, lang: st
         log.warning("expanding the script failed: %s", e)
         return None
     known = {s.narration.strip() for s in scenes}
-    added = [a for a in added if a.narration.strip() and a.narration.strip() not in known]
+    # seen live: gpt-oss wrote the additions of a Vietnamese script in English
+    added = [a for a in added if a.narration.strip() and a.narration.strip() not in known
+             and in_language(a.narration, lang)]
     if not added:
         return None
     slots: dict[int, list[LLMScene]] = {}
@@ -206,7 +208,7 @@ def rewrite_one(script: Script, scene: Scene, prev: str, nxt: str, instruction: 
     current_words = len(scene.narration.split())
     wants_shorter = any(h in instr.lower() for h in SHORTER_HINTS)
     limit = min(MAX_SCENE_WORDS, current_words - 1) if wants_shorter and current_words > 3 else MAX_SCENE_WORDS
-    prompt = render(
+    prompt = templates.prompt(
         "rewrite_scene.md", title=script.title, lang_name=LANG_NAMES[script.lang],
         angle=angle_block(angle, opening=scene.id == script.scenes[0].id),
         facts=facts_block(sources), prev=prev or "(none — this is the opening)", current=scene.narration,
@@ -216,8 +218,9 @@ def rewrite_one(script: Script, scene: Scene, prev: str, nxt: str, instruction: 
     got = len(out.narration.split())
     if got > limit:
         try:
-            retry = llm.generate(prompt + f"\n\nYour previous answer had {got} words: rewrite it with at most "
-                                          f"{limit} words, this scene's idea only.", LLMScene)
+            again = f"\n\nYour previous answer had {got} words: rewrite it with at most {limit} words, " \
+                    "this scene's idea only."
+            retry = llm.generate(lambda tier: prompt(tier) + again, LLMScene)
             if len(retry.narration.split()) < got:
                 out = retry
         except Exception as e:  # the first answer is still usable
@@ -275,7 +278,7 @@ def extend_script(script: Script, preset: FormatPreset, llm: LLMChain, sources: 
 
 
 def _generate_short(topic, lang, preset, llm, seconds, words, ctx, body, angle=None):
-    prompt = render(
+    prompt = templates.prompt(
         "short.md", topic=topic, **ctx, lang_name=LANG_NAMES[lang], target_words=words,
         target_seconds=seconds, scene_range="8-14", max_ai_video=preset.max_ai_video,
     )
@@ -328,7 +331,7 @@ def fix_hook(hook: str, topic: str, lang: str, ctx: dict, llm: LLMChain) -> str:
     if cut and hooks.hook_problem(cut) is None:
         return cut
     try:
-        new = llm.generate(render("hook_fix.md", topic=topic, lang_name=LANG_NAMES[lang], hook=hook,
+        new = llm.generate(templates.prompt("hook_fix.md", topic=topic, lang_name=LANG_NAMES[lang], hook=hook,
                                   problem=problem, facts=ctx["facts"], max_words=hooks.HOOK_MAX_WORDS),
                            HookFix).hook.strip()
     except Exception as e:
@@ -343,7 +346,7 @@ def fix_hook(hook: str, topic: str, lang: str, ctx: dict, llm: LLMChain) -> str:
 def _generate_long(topic, lang, preset, llm, seconds, words, ctx, body):
     n_chapters = max(3, round(seconds / SECONDS_PER_CHAPTER))
     outline = llm.generate(
-        render("long_outline.md", topic=topic, **ctx, lang_name=LANG_NAMES[lang],
+        templates.prompt("long_outline.md", topic=topic, **ctx, lang_name=LANG_NAMES[lang],
                 target_minutes=round(seconds / 60), chapter_count=n_chapters),
         Outline,
     )
@@ -361,7 +364,7 @@ def _generate_long(topic, lang, preset, llm, seconds, words, ctx, body):
         try:  # one chapter the model can't write must not lose the outline and every other chapter
             draft = _generate_with_length(
                 llm,
-                render("long_chapter.md", title=outline.title, **body, outline=outline_text, chapter_index=i,
+                templates.prompt("long_chapter.md", title=outline.title, **body, outline=outline_text, chapter_index=i,
                         chapter_count=len(outline.chapters), chapter_title=ch.title,
                         chapter_summary=ch.summary, position_note=note, lang_name=LANG_NAMES[lang],
                         # spread the AI-video budget: one slot per chapter for the first N chapters
@@ -430,6 +433,14 @@ def default_ai_prompt(query: str) -> str:
     return f"photorealistic cinematic shot of {query}, natural lighting"
 
 
+TYPOGRAPHY = str.maketrans({"\u2010": "-", "\u2011": "-", "\u2012": "-", "\u00a0": " ", "\u202f": " "})
+
+
+def in_language(text: str, lang: str) -> bool:
+    """Vietnamese narration always carries diacritics; an all-ASCII sentence is another language."""
+    return lang != "vi" or not text.isascii() or len(text.split()) < 4
+
+
 def postprocess(scenes: list[Scene], max_ai_video: int) -> list[Scene]:
     """Split long scenes, cap AI video count, fill missing AI prompts, renumber ids from 1."""
     out: list[Scene] = []
@@ -451,7 +462,8 @@ def postprocess(scenes: list[Scene], max_ai_video: int) -> list[Scene]:
         ai_prompt = scene.ai_prompt
         if vtype != "stock" and not ai_prompt:
             ai_prompt = default_ai_prompt(query)
-        for i, part in enumerate(split_narration(scene.narration)):
+        # typographic hyphens/spaces from hosted models ("14\u20114\u20112017") trip TTS and number matching
+        for i, part in enumerate(split_narration(scene.narration.translate(TYPOGRAPHY))):
             out.append(scene.model_copy(update={
                 "id": len(out) + 1,
                 "visual_query": query,

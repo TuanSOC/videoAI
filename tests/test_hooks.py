@@ -83,11 +83,11 @@ def test_expansion_never_goes_after_the_payoff():
 
 
 def test_prompts_ask_for_the_structure():
-    prompt = writer.render("short.md", topic="t", facts="", angle="", lang_name="Vietnamese", target_words=1,
+    prompt = writer.templates.render("short.md", topic="t", facts="", angle="", lang_name="Vietnamese", target_words=1,
                            target_seconds=1, scene_range="1", max_ai_video=0)
     for needle in ("open_loop", "payoff_scene", "second-to-last", "digits", "Bạn có biết"):
         assert needle in prompt, needle
-    brief = writer.render("brief_angles.md", topic="t", lang_name="Vietnamese", format_note="", facts="")
+    brief = writer.templates.render("brief_angles.md", topic="t", lang_name="Vietnamese", format_note="", facts="")
     assert "paradox" in brief and "Bạn có biết" in brief
 
 

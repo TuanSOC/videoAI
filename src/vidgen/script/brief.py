@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from vidgen.models import Angle, AngleStyle, Brief
 from vidgen.script.hooks import strip_generic_opener
-from vidgen.script.templates import render
+from vidgen.script.templates import prompt, render
 from vidgen.script.llm import LLMChain
 from vidgen.script.research import Wikipedia, facts_block
 from vidgen.script.research import research_with_status
@@ -73,7 +73,7 @@ def make_brief(topic: str, lang: str, fmt: str, llm: LLMChain, wiki: Wikipedia |
     from vidgen.config import LANG_NAMES
 
     sources, research_error = research_with_status(topic, lang, llm, wiki) if research else ([], "")
-    drafts = llm.generate(render("brief_angles.md", topic=topic, lang_name=LANG_NAMES[lang],
+    drafts = llm.generate(prompt("brief_angles.md", topic=topic, lang_name=LANG_NAMES[lang],
                                   format_note=FORMAT_NOTES[fmt], facts=facts_block(sources)), AngleList).angles
     # keep one angle per style, in the canonical order, even if the model repeated a style
     by_style: dict[str, AngleDraft] = {}
