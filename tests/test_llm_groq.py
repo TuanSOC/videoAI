@@ -268,3 +268,14 @@ def test_english_with_typographic_marks_is_still_not_vietnamese():
     from vidgen.script.writer import in_language
     assert not in_language("The exploit’s kill switch — a domain — stopped it.", "vi")
     assert in_language("Mã khai thác bị rò rỉ tháng 4.", "vi") and in_language("Anything goes here.", "en")
+
+
+def test_titles_and_hooks_get_plain_typography_too():
+    from vidgen.script import writer
+    draft = {"title": "Kill\u2011switch\u00a0WannaCry", "hook": "Một tên miền dừng WannaCry.", "mood": "tense",
+             "open_loop": "Vì sao?", "payoff_scene": 3,
+             "scenes": [{"narration": n, "visual_query": "server room", "alt_queries": [], "visual_type": "stock",
+                         "ai_prompt": ""} for n in ("Một tên miền dừng WannaCry.", "Vì sao?", "Vì nó là kill\u2011switch.",
+                                                    "Bạn nghĩ sao?")]}
+    script = writer.generate("x", "short", "vi", get_settings().preset("short"), L.LLMChain([Strong(answer=draft)]))
+    assert script.title == "Kill-switch WannaCry"

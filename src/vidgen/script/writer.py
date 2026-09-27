@@ -105,7 +105,8 @@ def generate(topic: str, fmt: Format, lang: Lang, preset: FormatPreset, llm: LLM
         title, hook, mood, scenes = _generate_long(topic, lang, preset, llm, seconds, words, ctx, body)
     if angle is not None:
         title = angle.title
-    return Script(title=title, hook=hook, lang=lang, format=fmt, mood=normalize_mood(mood),
+    return Script(title=title.translate(TYPOGRAPHY), hook=hook.translate(TYPOGRAPHY), lang=lang, format=fmt,
+                  mood=normalize_mood(mood),
                   scenes=postprocess(scenes, preset.max_ai_video),
                   sources=[SourceRef(title=s.title, url=s.url) for s in sources])
 

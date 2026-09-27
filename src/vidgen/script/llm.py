@@ -118,8 +118,9 @@ class GroqProvider:
     def generate_json(self, prompt: str, schema: type[BaseModel]) -> str:
         resp = self._post(prompt, {"type": "json_schema", "json_schema": {
             "name": schema.__name__, "strict": True, "schema": strict_schema(schema)}})
-        if resp.status_code == 400:   # a schema shape the model's strict mode doesn't take: plain JSON mode
-            log.warning("groq %s rejected the schema, using json_object mode", self._model)
+        if resp.status_code == 400:   # schema not accepted, or the answer failed it (json_validate_failed)
+            log.warning("groq %s: strict JSON failed (%s), retrying in json_object mode", self._model,
+                        resp.text[:120])
             resp = self._post(f"{prompt}\n\nAnswer with one JSON object matching this JSON schema:\n"
                               f"{json.dumps(schema.model_json_schema())}", {"type": "json_object"})
         if resp.status_code in (401, 403):

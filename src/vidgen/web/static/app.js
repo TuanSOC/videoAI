@@ -347,6 +347,13 @@ let llmCtx = {};  // which models wrote the brief/script (state.json "llm")
 function modelBadge(u) {
   return u?.models?.length ? `<span class="model-badge ${u.fallback ? "fallback" : ""}" title="Model đã viết phần này">✍️ ${esc(u.models.map(modelName).join(" + "))}</span>` : "";
 }
+function fallbackBanner(u) {
+  const local = u.models.filter((m) => m.startsWith("ollama:"));
+  const part = local.length < u.models.length ? "một phần nội dung" : "phần này";
+  return `<div class="banner warn"><div><b>Groq không dùng được lúc đó</b> (hết lượt miễn phí, lỗi mạng hoặc sai key) —
+    ${part} do model local ${esc(local.map(modelName).join(", ") || "ollama")} viết, có thể mỏng hơn.
+    Có thể tạo lại khi Groq hoạt động.</div></div>`;
+}
 let factCtx = { checked: false, issues: new Map() }; // narration text → note (from factcheck.json)
 const aiOpen = new Set();  // scene indices with the "✨ rewrite" row open
 const aiUndo = new Map();  // scene index → {narration, visual_query} before the AI rewrite
@@ -417,9 +424,7 @@ async function renderDetail(slug, { keepDraft = false } = {}) {
         ${["brief", "script", "render"].includes(job.kind) ? `<button class="btn primary sm" id="retry">Thử lại</button>` : ""}</div>` : ""}
     ${v.status === "stale" && !active ? `<div class="banner info">Kịch bản đã sửa sau khi dựng — video hiện tại chưa khớp. Bấm <b>Render lại</b>.</div>` : ""}
     ${taskBanner}
-    ${fellBack && !active ? `<div class="banner warn"><div><b>Groq không dùng được</b> (hết lượt miễn phí, lỗi mạng hoặc sai key) —
-        phần này do model local ${esc(modelName((llmCtx.script?.fallback ? llmCtx.script : llmCtx.brief).models.slice(-1)[0] || "ollama"))} viết, nội dung sẽ mỏng hơn.
-        Có thể tạo lại khi Groq hoạt động.</div></div>` : ""}
+    ${fellBack && !active ? fallbackBanner(v.script ? llmCtx.script : llmCtx.brief) : ""}
     ${v.sources_missing && !showBrief && !active ? `<div class="banner warn"><div><b>Kịch bản này viết không có nguồn</b> —
         ${v.research_error ? "lần tra Wikipedia bị lỗi, dữ kiện chưa được đối chiếu." : "không tìm thấy bài Wikipedia phù hợp, dữ kiện chưa được đối chiếu."}
         Tra nguồn lại rồi chọn góc để viết lại kịch bản.</div>
