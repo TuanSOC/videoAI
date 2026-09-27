@@ -580,3 +580,23 @@ def test_unsourced_script_is_flagged_with_the_reason(env):
     (d / pipeline.BRIEF_FILE).write_text(brief.model_dump_json(), encoding="utf-8")
     v = client.get(f"/api/videos/{slug}").json()
     assert v["sources_missing"] is True and "handshake" in v["research_error"]
+
+
+def test_enhance_topics_endpoint(env, monkeypatch):
+    from vidgen import pipeline
+    from vidgen.script.enhance import TopicIdea
+
+    client = env[0]
+    monkeypatch.setattr(pipeline, "enhance_topics", lambda text, lang, fmt, s: (
+        [TopicIdea(topic="WannaCry 2017: vì sao bản vá có sẵn vẫn thua?", reason="Cụ thể hơn.")],
+        {"models": ["groq:openai/gpt-oss-120b"], "fallback": False}))
+    r = client.post("/api/topics/enhance", json={"text": "wannacry", "lang": "vi", "format": "short"})
+    assert r.status_code == 200
+    assert r.json() == {"ideas": [{"topic": "WannaCry 2017: vì sao bản vá có sẵn vẫn thua?", "reason": "Cụ thể hơn."}],
+                        "models": ["groq:openai/gpt-oss-120b"], "fallback": False}
+
+    def down(*a):
+        raise RuntimeError("All LLM providers failed")
+    monkeypatch.setattr(pipeline, "enhance_topics", down)
+    r = client.post("/api/topics/enhance", json={"text": "wannacry", "lang": "vi", "format": "short"})
+    assert r.status_code == 502 and "All LLM providers failed" in r.json()["detail"]

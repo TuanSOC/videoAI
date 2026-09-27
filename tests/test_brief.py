@@ -156,7 +156,7 @@ def test_regenerating_angles_keeps_the_current_scripts_sources(tmp_path, monkeyp
     (tmp_path / "state.json").write_text('{"topic": "t", "format": "short", "lang": "vi"}', encoding="utf-8")
     fresh = Brief(topic="t", angles=[Angle(style="explain", title="New", hook="h", key_points=["k"])])
     monkeypatch.setattr("vidgen.script.brief.make_brief", lambda *a, **k: fresh.model_copy(deep=True))
-    monkeypatch.setattr("vidgen.script.llm.default_chain", lambda s, role="creative": None)
+    monkeypatch.setattr("vidgen.script.llm.default_chain", lambda s, role="creative": LLMChain([None]))
 
     pipeline.write_brief(tmp_path, get_settings())
     b = pipeline.load_brief(tmp_path)

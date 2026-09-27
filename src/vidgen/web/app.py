@@ -50,6 +50,12 @@ class Ideas(BaseModel):
     auto_render: bool = False
 
 
+class EnhanceRequest(BaseModel):
+    text: str = Field(min_length=2, max_length=4000)
+    format: Literal["short", "long"] = "short"
+    lang: Literal["vi", "en"] = "vi"
+
+
 class ChooseAngle(BaseModel):
     angle: int
     title: str | None = None
@@ -286,6 +292,15 @@ def create_app(settings: Callable[[], Settings] = get_settings,
             created.append(summary(d))
         return created
 
+    @app.post("/api/topics/enhance")
+    def enhance_topics(req: EnhanceRequest) -> dict:
+        """✨ one quick LLM call: specific topic suggestions for what the user typed (nothing is created)."""
+        try:
+            ideas, usage = pipeline.enhance_topics(req.text, req.lang, req.format, settings())
+        except Exception as e:
+            raise HTTPException(502, f"could not enhance the ideas: {e}") from e
+        return {"ideas": [i.model_dump() for i in ideas], **usage}
+
     @app.get("/api/videos/{slug}")
     def get_video(slug: str) -> dict:
         d = video_dir(slug)
@@ -315,6 +330,7 @@ def create_app(settings: Callable[[], Settings] = get_settings,
             "factcheck": current_factcheck(d, script),
             "metadata": json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else None,
             "timings": pipeline.load_state(d).get("timings", {}),
+            "llm": pipeline.load_state(d).get("llm", {}),   # which model wrote the brief/script; fallback?
             "job": job.to_dict() if job else None,
             "artifacts": {st.name: (d / st.artifact).exists() for st in pipeline.STAGES},
             # per-scene clips, only while they still match the script (after an edit they'll be re-picked)

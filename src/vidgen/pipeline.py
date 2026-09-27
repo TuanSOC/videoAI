@@ -49,14 +49,14 @@ class Job:
 
 
 # --- stage bodies (imports are lazy so `doctor`/`--help` stay fast) ---------------------
-def _script(job: Job, fmt: str = "short", lang: str = "vi"):
+def _script(job: Job, fmt: str = "short", lang: str = "vi", llm=None):
     """Generate a script (not written yet) and the sources it was grounded in."""
     from vidgen.script import writer
     from vidgen.script.llm import default_chain
     from vidgen.script.research import research
 
     s = job.settings
-    llm = default_chain(s)
+    llm = llm or default_chain(s)
     brief = load_brief(job.out_dir)
     angle = brief.chosen_angle() if brief else None
     if angle is not None:
@@ -193,10 +193,13 @@ def write_script(out_dir: Path, s: Settings) -> None:
     video, metadata) dropped — the new hash is recorded below, so run_stages could not detect the
     change on its own. If generation fails, the finished video and the angle its facts came from are
     left exactly as they were."""
+    from vidgen.script.llm import default_chain
+
     state = _load_state(out_dir)
     t = time.time()
+    llm = default_chain(s)
     try:
-        script, sources = _script(Job(out_dir, s, state["topic"]), state["format"], state["lang"])
+        script, sources = _script(Job(out_dir, s, state["topic"]), state["format"], state["lang"], llm=llm)
     except Exception:
         _keep_script_angle(out_dir)
         raise
@@ -204,6 +207,7 @@ def write_script(out_dir: Path, s: Settings) -> None:
     _write_sources(out_dir, sources)
     write_atomic(out_dir / "script.json", script.model_dump_json(indent=2))
     _record_script_angle(out_dir)
+    state.setdefault("llm", {})["script"] = llm.usage()
     _replace_script_done(out_dir, s, state, t)
 
 
@@ -306,6 +310,15 @@ def split_topics(text: str, lang: str, s: Settings) -> list[str]:
     return split_ideas(text, lang, default_chain(s))
 
 
+def enhance_topics(text: str, lang: str, fmt: str, s: Settings):
+    """✨ suggestions for the ideas box → (ideas, which model wrote them)."""
+    from vidgen.script.enhance import enhance_topics as enhance
+    from vidgen.script.llm import default_chain
+
+    llm = default_chain(s)
+    return enhance(text, lang, fmt, llm), llm.usage()
+
+
 def write_brief(out_dir: Path, s: Settings) -> None:
     """3 angles with sources for the topic recorded by init_video → brief.json."""
     from vidgen.script.brief import make_brief
@@ -313,8 +326,8 @@ def write_brief(out_dir: Path, s: Settings) -> None:
 
     state = _load_state(out_dir)
     t = time.time()
-    brief = make_brief(state["topic"], state["lang"], state["format"], default_chain(s),
-                       research=s.pipeline.research)
+    llm = default_chain(s)
+    brief = make_brief(state["topic"], state["lang"], state["format"], llm, research=s.pipeline.research)
     old = load_brief(out_dir)
     if old is not None and (out_dir / "script.json").exists():
         # new angles, same script: keep what the script was written from until another angle is chosen
@@ -323,6 +336,7 @@ def write_brief(out_dir: Path, s: Settings) -> None:
             brief.script_angle = current.model_copy(update={"sources": old.chosen_sources()})
     write_atomic(out_dir / BRIEF_FILE, brief.model_dump_json(indent=2))
     state.setdefault("timings", {})["brief"] = round(time.time() - t, 1)
+    state.setdefault("llm", {})["brief"] = llm.usage()
     _save_state(out_dir, state)
 
 

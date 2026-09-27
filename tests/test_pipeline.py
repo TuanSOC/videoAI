@@ -95,7 +95,7 @@ def test_write_script_drops_everything_built_from_the_old_script(tmp_path, monke
         (tmp_path / name).write_text("old")
     (tmp_path / "state.json").write_text('{"topic": "t", "format": "short", "lang": "vi"}')
     new = Script(title="t", hook="h", lang="en", format="short", scenes=[Scene(id=1, narration="Mới.", visual_query="q")])
-    monkeypatch.setattr(pipeline, "_script", lambda job, fmt, lang: (new, []))
+    monkeypatch.setattr(pipeline, "_script", lambda job, fmt, lang, llm=None: (new, []))
     monkeypatch.setattr(pipeline, "check_facts", lambda d, s: None)
     pipeline.write_script(tmp_path, get_settings())
     left = {p.name for p in tmp_path.iterdir()} - {"script.json", "state.json"}

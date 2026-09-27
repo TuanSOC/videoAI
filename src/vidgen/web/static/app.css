@@ -280,3 +280,16 @@ select.input { cursor: pointer; }
 
 .vision { color: var(--muted, #9aa4b2); }
 .vision.weak { color: #f5b041; font-weight: 600; }
+
+/* ✨ topic enhance + which model wrote it */
+.idea-box { position: relative; }
+.idea-box .enhance { position: absolute; right: 8px; bottom: 8px; }
+.idea-box textarea { padding-bottom: 44px; }
+.suggest { margin-top: 10px; padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid var(--cyan-soft);
+  background: var(--cyan-soft); display: grid; gap: 8px; }
+.suggest-head { font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.suggest-item { display: grid; gap: 2px; }
+.suggest-item .hint { margin-top: 0; }
+.model-badge { font-size: 11px; font-weight: 500; color: var(--muted); border: 1px solid var(--border-strong);
+  border-radius: 999px; padding: 1px 8px; white-space: nowrap; vertical-align: middle; }
+.model-badge.fallback { color: var(--amber); border-color: var(--amber); }

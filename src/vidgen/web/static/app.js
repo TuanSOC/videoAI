@@ -148,6 +148,22 @@ async function refreshHealth() {
 }
 
 // ---------- library ----------
+// the ideas box survives the library's periodic refresh (it re-renders the whole page)
+const ideaDraft = { text: "", ideas: null, models: [], fallback: false, busy: false };
+
+function modelName(spec) { return spec.split(":").slice(1).join(":").replace(/^openai\//, "") || spec; }
+
+function suggestionsHtml() {
+  if (ideaDraft.busy) return `<div class="suggest"><div class="skeleton"></div></div>`;
+  if (!ideaDraft.ideas) return "";
+  return `<div class="suggest">
+      <div class="suggest-head">✨ Gợi ý chủ đề <span class="model-badge">${esc(ideaDraft.models.map(modelName).join(", "))}</span></div>
+      ${ideaDraft.fallback ? `<div class="hint">Groq không dùng được — gợi ý này do model local viết.</div>` : ""}
+      ${ideaDraft.ideas.map((i) => `<div class="suggest-item"><b>${esc(i.topic)}</b><span class="hint">${esc(i.reason)}</span></div>`).join("")}
+      <div class="row"><button class="btn primary sm" type="button" id="use-ideas">Dùng</button>
+        <button class="btn ghost sm" type="button" id="drop-ideas">Bỏ qua</button></div></div>`;
+}
+
 async function renderLibrary() {
   const videos = await api("/api/videos");
   if (!["", "#/", "#"].includes(location.hash)) return;
@@ -157,9 +173,12 @@ async function renderLibrary() {
     </div>
     <form class="card new-video" id="new-form">
       <label class="field"><span>Ý tưởng video</span>
-        <textarea class="input" name="text" rows="3" required minlength="3" maxlength="4000"
-          placeholder="Một ý tưởng thô là đủ, VD: bạch tuộc. Dán nhiều ý (mỗi dòng một ý) để tạo nhiều video cùng lúc."></textarea>
+        <div class="idea-box"><textarea class="input" name="text" rows="3" required minlength="3" maxlength="4000"
+          placeholder="Một ý tưởng thô là đủ, VD: bạch tuộc. Dán nhiều ý (mỗi dòng một ý) để tạo nhiều video cùng lúc.">${esc(ideaDraft.text)}</textarea>
+          <button class="btn sm enhance" type="button" id="enhance" title="AI viết lại thành chủ đề cụ thể, hấp dẫn hơn — bạn duyệt trước khi dùng"
+            ${ideaDraft.busy ? "disabled" : ""}>✨ Làm giàu chủ đề</button></div>
         <div class="hint">AI sẽ tách từng chủ đề, đề xuất 3 góc khai thác và tìm nguồn Wikipedia cho mỗi góc.</div></label>
+      <div id="suggestions">${suggestionsHtml()}</div>
       <div class="row">
         <div class="field"><span>Định dạng</span>
           <div class="segmented" role="radiogroup">
@@ -194,7 +213,37 @@ async function renderLibrary() {
     } catch (e) { toast(e.message, "error"); b.disabled = false; }
   });
 
-  document.getElementById("new-form").addEventListener("submit", async (ev) => {
+  const form = document.getElementById("new-form");
+  const ideaInput = form.querySelector("textarea[name=text]");
+  ideaInput.addEventListener("input", () => { ideaDraft.text = ideaInput.value; });
+  const showSuggestions = () => {
+    document.getElementById("suggestions").innerHTML = suggestionsHtml();
+    document.getElementById("enhance").disabled = ideaDraft.busy;
+    document.getElementById("use-ideas")?.addEventListener("click", () => {
+      ideaDraft.text = ideaInput.value = ideaDraft.ideas.map((i) => i.topic).join("\n");
+      ideaDraft.ideas = null;
+      showSuggestions();
+      ideaInput.focus();
+    });
+    document.getElementById("drop-ideas")?.addEventListener("click", () => { ideaDraft.ideas = null; showSuggestions(); });
+  };
+  showSuggestions();
+  document.getElementById("enhance").addEventListener("click", async () => {
+    const f = new FormData(form);
+    if (ideaInput.value.trim().length < 2) { toast("Nhập ý tưởng trước đã", "error"); ideaInput.focus(); return; }
+    ideaDraft.busy = true;
+    showSuggestions();
+    try {
+      const out = await api("/api/topics/enhance", { method: "POST", body: {
+        text: ideaInput.value, format: f.get("format"), lang: f.get("lang") } });
+      Object.assign(ideaDraft, { ideas: out.ideas, models: out.models, fallback: out.fallback });
+    } catch (e) { toast(`Không làm giàu được: ${e.message}`, "error"); }
+    ideaDraft.busy = false;
+    // the library may have re-rendered meanwhile: work on whatever form is on the page now
+    if (document.getElementById("suggestions")) renderLibrary();
+  });
+
+  form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     askNotify();
     const f = new FormData(ev.target);
@@ -205,6 +254,7 @@ async function renderLibrary() {
       const created = await api("/api/ideas", { method: "POST", body: {
         text: f.get("text"), format: f.get("format"), lang: f.get("lang"), auto_render: f.has("auto_render"),
       } });
+      Object.assign(ideaDraft, { text: "", ideas: null });
       if (created.length === 1) location.hash = `#/v/${created[0].slug}`;
       else { toast(`Đã tách thành ${created.length} video — mỗi video đang tìm góc & nguồn`); renderLibrary(); }
     } catch (e) {
@@ -290,6 +340,10 @@ function lengthBar(totalWords) {
     </div>`;
 }
 
+let llmCtx = {};  // which models wrote the brief/script (state.json "llm")
+function modelBadge(u) {
+  return u?.models?.length ? `<span class="model-badge ${u.fallback ? "fallback" : ""}" title="Model đã viết phần này">✍️ ${esc(u.models.map(modelName).join(" + "))}</span>` : "";
+}
 let factCtx = { checked: false, issues: new Map() }; // narration text → note (from factcheck.json)
 const aiOpen = new Set();  // scene indices with the "✨ rewrite" row open
 const aiUndo = new Map();  // scene index → {narration, visual_query} before the AI rewrite
@@ -321,6 +375,8 @@ async function renderDetail(slug, { keepDraft = false } = {}) {
   factCtx = { checked: !!v.factcheck?.checked,
               issues: new Map((v.factcheck?.issues || []).map((x) => [x.narration, x.note])) };
   clipCtx = { slug, bySceneId: new Map((v.assets || []).map((a) => [a.scene_id, a])) };
+  llmCtx = v.llm || {};
+  const fellBack = v.script ? llmCtx.script?.fallback : llmCtx.brief?.fallback;
   const needsRerender = v.status === "review" && v.assets && v.metadata && !v.has_video;
   const showBrief = !!v.brief && !active && (!v.script || briefMode === slug);
   const jobLabel = { brief: "Không tạo được góc khai thác", script: "Không viết được kịch bản",
@@ -358,6 +414,9 @@ async function renderDetail(slug, { keepDraft = false } = {}) {
         ${["brief", "script", "render"].includes(job.kind) ? `<button class="btn primary sm" id="retry">Thử lại</button>` : ""}</div>` : ""}
     ${v.status === "stale" && !active ? `<div class="banner info">Kịch bản đã sửa sau khi dựng — video hiện tại chưa khớp. Bấm <b>Render lại</b>.</div>` : ""}
     ${taskBanner}
+    ${fellBack && !active ? `<div class="banner warn"><div><b>Groq không dùng được</b> (hết lượt miễn phí, lỗi mạng hoặc sai key) —
+        phần này do model local ${esc(modelName((llmCtx.script?.fallback ? llmCtx.script : llmCtx.brief).models.slice(-1)[0] || "ollama"))} viết, nội dung sẽ mỏng hơn.
+        Có thể tạo lại khi Groq hoạt động.</div></div>` : ""}
     ${v.sources_missing && !showBrief && !active ? `<div class="banner warn"><div><b>Kịch bản này viết không có nguồn</b> —
         ${v.research_error ? "lần tra Wikipedia bị lỗi, dữ kiện chưa được đối chiếu." : "không tìm thấy bài Wikipedia phù hợp, dữ kiện chưa được đối chiếu."}
         Tra nguồn lại rồi chọn góc để viết lại kịch bản.</div>
@@ -428,7 +487,7 @@ function renderBrief(v) {
   // sources are researched once per topic and shared by the angles; union keeps older per-angle briefs working
   const sources = [...new Map(b.angles.flatMap((a) => a.sources).map((s) => [s.url, s])).values()];
   document.getElementById("scenes").innerHTML = `
-    <div class="scenes-head"><h2 class="section-title">Chủ đề: ${esc(b.topic)}</h2>
+    <div class="scenes-head"><h2 class="section-title">Chủ đề: ${esc(b.topic)} ${modelBadge(llmCtx.brief)}</h2>
       <button class="btn ghost sm" id="regen-brief" title="Tra nguồn lại và đề xuất 3 góc mới">↻ Tạo lại 3 góc</button></div>
     <div class="card panel brief-sources"><h2 class="section-title">Nguồn Wikipedia — bỏ tick nguồn sai chủ đề</h2>
       ${sources.length ? sources.map(sourceRow).join("")
@@ -513,7 +572,7 @@ function renderScenes(lang, active, job) {
   let lastChapter = null;
   box.innerHTML = `
     <div class="scenes-head">
-      <div class="stats"><span><b>${draft.scenes.length}</b> cảnh</span><span><b id="total-words">${total}</b> từ</span></div>
+      <div class="stats"><span><b>${draft.scenes.length}</b> cảnh</span><span><b id="total-words">${total}</b> từ</span>${modelBadge(llmCtx.script)}</div>
       <span class="dirty" id="dirty" ${dirty ? "" : "hidden"}>● Chưa lưu</span>
     </div>
     ${lengthBar(total)}

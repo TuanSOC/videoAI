@@ -158,6 +158,7 @@ class LLMChain:
         self.retries = retries
         self.last_provider = ""   # who answered the last generate() ("groq:openai/gpt-oss-120b", ...)
         self.fallback = False     # True when that was not the first provider
+        self.used: list[str] = []  # every answer's provider, for usage()
 
     def generate(self, prompt: str | Callable[[str], str], schema: type[T]) -> T:
         """`prompt` may be a function of the provider's tier (templates.prompt): each provider gets its own."""
@@ -169,6 +170,7 @@ class LLMChain:
                     raw = provider.generate_json(text, schema)
                     out = schema.model_validate(json.loads(raw))
                     self.last_provider, self.fallback = provider.name, provider is not self.providers[0]
+                    self.used.append(provider.name)
                     return out
                 except (json.JSONDecodeError, ValidationError) as e:
                     errors.append(f"{provider.name}#{attempt}: invalid output: {e}")
@@ -178,6 +180,12 @@ class LLMChain:
                     log.warning("%s failed: %s", provider.name, e)
                     break
         raise LLMError("All LLM providers failed:\n" + "\n".join(errors))
+
+
+    def usage(self) -> dict:
+        """Which models answered so far, and whether any answer came from a fallback (shown in the studio)."""
+        models = list(dict.fromkeys(self.used))
+        return {"models": models, "fallback": any(m != self.providers[0].name for m in models)}
 
 
 def default_chain(s: Settings, role: str = "creative") -> LLMChain:
