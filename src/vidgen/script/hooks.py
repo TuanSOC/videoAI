@@ -58,3 +58,13 @@ def hook_problem(text: str) -> str | None:
     if word_count(text) > HOOK_MAX_WORDS:
         return "too long"
     return None
+
+
+# asking viewers to comment belongs to the closing scene only (seen live: a second one in scene 12 of 15)
+CTA_PHRASES = ("hãy chia sẻ", "chia sẻ ý kiến", "để lại bình luận", "bình luận bên dưới", "để lại ý tưởng",
+               "comment below", "in the comments", "let me know", "leave a comment", "share your")
+
+
+def is_comment_cta(text: str) -> bool:
+    low = text.casefold()
+    return any(p in low for p in CTA_PHRASES)

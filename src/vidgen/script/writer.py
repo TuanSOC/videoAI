@@ -308,6 +308,7 @@ def _open_loop_structure(scenes: list[Scene], open_loop: str, angle: Angle | Non
     if 1 <= payoff < len(scenes) - 1:  # answered too early: the reveal belongs at the end
         answer = scenes.pop(payoff - 1)
         scenes.insert(len(scenes) - 1, answer)  # before the closing question (pop first: len changes)
+    scenes = [sc for i, sc in enumerate(scenes) if i == len(scenes) - 1 or not hooks.is_comment_cta(sc.narration)]
     if angle is not None and hooks.hook_problem(angle.hook) is None:
         stock = {"narration": angle.hook, "visual_type": "stock", "ai_prompt": ""}
         if _similar(scenes[0].narration, angle.hook):

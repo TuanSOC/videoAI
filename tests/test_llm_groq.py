@@ -220,3 +220,9 @@ def test_typographic_hyphens_and_spaces_are_plain_in_narration():
     from vidgen.script import writer
     [s] = writer.postprocess([Scene(id=0, narration="Ngày 14\u20114\u20112017, 200\u00a0000 máy.", visual_query="q")], 0)
     assert s.narration == "Ngày 14-4-2017, 200 000 máy."
+
+
+def test_strong_prompts_forbid_unpronounceable_strings():
+    from vidgen.script.templates import PROMPTS
+    spoken = ("short.md", "long_chapter.md", "expand.md", "rewrite_scene.md", "hook_fix.md")
+    assert all("domain names" in (PROMPTS / "strong" / n).read_text(encoding="utf-8") for n in spoken)

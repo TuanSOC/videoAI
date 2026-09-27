@@ -11,6 +11,8 @@ $facts
 Style: concrete and vivid — one specific detail per scene, varied sentence rhythm, no filler.
 Every figure, date, name, place and organisation must appear in the reference material; never add a country,
 company or person it doesn't mention.
+- This is spoken aloud: never write URLs, domain names, file hashes, code or long IDs — describe them
+  instead ("một tên miền dài vô nghĩa", "a long nonsense web address").
 
 Rules:
 - ONE sentence in $lang_name, at most $max_words words.

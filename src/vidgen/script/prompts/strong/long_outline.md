@@ -21,6 +21,8 @@ Facts (strict):
 - Every figure, date, name, place, organisation and quote MUST appear in the reference material.
   Never tie the topic to a country, company or person the material doesn't mention (e.g. no "in Vietnam"
   unless the material says so). If the material has no number for something, describe it without one.
+- This is spoken aloud: never write URLs, domain names, file hashes, code or long IDs — describe them
+  instead ("một tên miền dài vô nghĩa", "a long nonsense web address").
 - Each chapter has a turning point: a surprise, a consequence or a question that pulls into the next.
 
 Rules:

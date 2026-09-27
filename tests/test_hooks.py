@@ -144,3 +144,16 @@ def test_the_answer_moves_to_just_before_the_closing_question():
     script = writer.generate("x", "short", "vi", preset(), LLMChain([Scripted(ShortDraft=[d])]))
     texts = [s.narration for s in script.scenes]
     assert texts[-2] == answer and texts.count(answer) == 1
+
+
+def test_only_the_last_scene_asks_for_comments():
+    from vidgen.models import Scene
+
+    def sc(n):
+        return Scene(id=0, narration=n, visual_query="q")
+    scenes = [sc("Một tên miền đã chặn WannaCry."), sc("Vì sao một chuỗi ký tự lại dừng được nó?"),
+              sc("Hutchins đăng ký tên miền đó."), sc("Bạn nghĩ gì về điều này? Hãy chia sẻ!"),
+              sc("Vậy câu trả lời: tên miền là công tắc tắt."), sc("Bạn sẽ làm gì? Hãy để lại bình luận.")]
+    out = writer._open_loop_structure(scenes, "", None, 0)
+    assert [s.narration for s in out] == [s.narration for s in scenes[:3] + scenes[4:]]
+    assert hooks.is_comment_cta("Let me know in the comments!") and not hooks.is_comment_cta("Vì sao nó lây lan?")
