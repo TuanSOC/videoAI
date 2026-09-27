@@ -1,10 +1,12 @@
 ---
 phase: 3
-title: "Topic enhance and model badge"
-status: pending
+title: Topic enhance and model badge
+status: completed
 priority: P2
-effort: "3h"
-dependencies: [1, 2]
+effort: 3h
+dependencies:
+  - 1
+  - 2
 ---
 
 # Phase 3: Topic enhance and model badge

@@ -1,10 +1,11 @@
 ---
 phase: 2
-title: "Prompt tiers and strong prompts"
-status: pending
+title: Prompt tiers and strong prompts
+status: completed
 priority: P1
-effort: "4h"
-dependencies: [1]
+effort: 4h
+dependencies:
+  - 1
 ---
 
 # Phase 2: Prompt tiers and strong prompts

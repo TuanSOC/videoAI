@@ -1,14 +1,20 @@
 ---
-title: "Groq script writer + strong prompts + topic enhance"
-description: "Creative LLM tasks on Groq (gpt-oss-120b → qwen3.8-27b → Ollama), richer prompts for strong models, ✨ topic enhance"
-status: pending
+title: Groq script writer + strong prompts + topic enhance
+description: >-
+  Creative LLM tasks on Groq (gpt-oss-120b → qwen3.8-27b → Ollama), richer
+  prompts for strong models, ✨ topic enhance
+status: completed
 priority: P2
-branch: "main"
-tags: [llm, groq, prompts, ui]
+branch: main
+tags:
+  - llm
+  - groq
+  - prompts
+  - ui
 blockedBy: []
 blocks: []
-created: "2026-09-27T09:27:37.022Z"
-createdBy: "ck:plan"
+created: '2026-09-27T09:27:37.022Z'
+createdBy: 'ck:plan'
 source: skill
 ---
 
@@ -26,10 +32,10 @@ Mode: `--tdd` — each phase writes failing tests first, then code; full suite (
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 1 | [Groq provider and role routing](./phase-01-groq-provider-and-role-routing.md) | Pending |
-| 2 | [Prompt tiers and strong prompts](./phase-02-prompt-tiers-and-strong-prompts.md) | Pending |
-| 3 | [Topic enhance and model badge](./phase-03-topic-enhance-and-model-badge.md) | Pending |
-| 4 | [Live verification](./phase-04-live-verification.md) | Pending |
+| 1 | [Groq provider and role routing](./phase-01-groq-provider-and-role-routing.md) | Completed |
+| 2 | [Prompt tiers and strong prompts](./phase-02-prompt-tiers-and-strong-prompts.md) | Completed |
+| 3 | [Topic enhance and model badge](./phase-03-topic-enhance-and-model-badge.md) | Completed |
+| 4 | [Live verification](./phase-04-live-verification.md) | Completed |
 
 ## Key decisions
 - Roles: `creative` (brief angles, research plan/pick, script, expand, rewrite, hook fix, metadata, split ideas,

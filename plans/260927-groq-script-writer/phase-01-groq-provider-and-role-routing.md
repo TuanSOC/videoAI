@@ -1,9 +1,9 @@
 ---
 phase: 1
-title: "Groq provider and role routing"
-status: pending
+title: Groq provider and role routing
+status: completed
 priority: P1
-effort: "3h"
+effort: 3h
 dependencies: []
 ---
 
