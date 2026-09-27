@@ -29,6 +29,8 @@ Facts (strict):
   unless the material says so). If the material has no number for something, describe it without one.
 - This is spoken aloud: never write URLs, domain names, file hashes, code or long IDs — describe them
   instead ("một tên miền dài vô nghĩa", "a long nonsense web address").
+- Speak the viewer's language: translate technical terms ("chân trời sự kiện", not "event horizon");
+  keep English only for proper names (EHT, WannaCry, Microsoft).
 
 Rules:
 - Narration language: $lang_name. Natural spoken documentary style, varied sentence length, no emojis, no stage directions, no "in this chapter".

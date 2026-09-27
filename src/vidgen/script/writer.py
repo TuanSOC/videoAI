@@ -47,6 +47,10 @@ class ShortDraft(BaseModel):
     scenes: list[LLMScene] = Field(min_length=3)
 
 
+class ClosingQuestion(BaseModel):
+    question: str
+
+
 class HookFix(BaseModel):
     hook: str
 
@@ -289,6 +293,7 @@ def _generate_short(topic, lang, preset, llm, seconds, words, ctx, body, angle=N
                  draft.payoff_scene, len(draft.scenes))
     scenes = _open_loop_structure([Scene(id=0, **s.model_dump()) for s in draft.scenes], draft.open_loop,
                                   angle, draft.payoff_scene)
+    scenes = ensure_closing_question(scenes, topic, lang, llm)
     hook = fix_hook(scenes[0].narration, topic, lang, ctx, llm)
     scenes[0] = scenes[0].model_copy(update={"narration": hook})
     return draft.title, hook, draft.mood, scenes
@@ -323,6 +328,23 @@ def _open_loop_structure(scenes: list[Scene], open_loop: str, angle: Angle | Non
             and bare(question) not in {bare(s.narration) for s in scenes}):
         scenes.insert(1, scenes[1].model_copy(update={"narration": question, "visual_type": "stock", "ai_prompt": ""}))
     return scenes
+
+
+def ensure_closing_question(scenes: list[Scene], topic: str, lang: str, llm: LLMChain) -> list[Scene]:
+    """The last scene asks the viewer something (comments feed the algorithm). Seen live: gpt-oss ended on a
+    statement. One small call adds the question; if it fails the script stays as it is."""
+    if not scenes or ends_with(scenes[-1].narration, ("?",)):
+        return scenes
+    story = "\n".join(s.narration for s in scenes)
+    try:
+        q = llm.generate(templates.prompt("closing_question.md", topic=topic, lang_name=LANG_NAMES[lang],
+                                          story=story, max_words=hooks.HOOK_MAX_WORDS), ClosingQuestion).question.strip()
+    except Exception as e:
+        log.warning("closing question failed: %s", e)
+        return scenes
+    if not ends_with(q, ("?",)) or len(q.split()) > hooks.HOOK_MAX_WORDS or not in_language(q, lang):
+        return scenes
+    return [*scenes, scenes[-1].model_copy(update={"narration": q, "visual_type": "stock", "ai_prompt": ""})]
 
 
 def fix_hook(hook: str, topic: str, lang: str, ctx: dict, llm: LLMChain) -> str:

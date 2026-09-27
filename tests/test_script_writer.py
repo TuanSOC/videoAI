@@ -154,7 +154,8 @@ def test_short_draft_keeps_first_when_retry_is_not_longer():
 
 def test_long_enough_draft_is_not_retried():
     long_draft = {"title": "t", "hook": "h", "open_loop": "", "payoff_scene": 0,
-                  "scenes": [scene("Con tàu biến mất không dấu vết.")] + [scene(" ".join(["từ"] * 20) + ".")] * 11}
+                  "scenes": [scene("Con tàu biến mất không dấu vết.")] + [scene(" ".join(["từ"] * 20) + ".")] * 10
+                  + [scene(" ".join(["từ"] * 20) + "?")]}
     fake = FakeProvider("fake", [long_draft])
     writer.generate("x", "short", "vi", get_settings().preset("short"), LLMChain([fake]))
     assert len(fake.prompts) == 1

@@ -42,6 +42,7 @@ class Scripted:
 
 def draft(hook, n=6, payoff=5, words_per_scene=22):
     body = [{"narration": " ".join([f"w{i}"] * words_per_scene) + ".", "visual_query": "q"} for i in range(n - 1)]
+    body[-1]["narration"] = body[-1]["narration"][:-1] + "?"   # ends by asking the viewer, like a real draft
     return {"title": "T", "hook": hook, "mood": "mystery", "open_loop": "Vì sao?", "payoff_scene": payoff,
             "scenes": [{"narration": hook, "visual_query": "q"}, *body]}
 
@@ -164,3 +165,22 @@ def test_the_hook_is_never_dropped_as_a_comment_request():
     scenes = [Scene(id=0, narration=n, visual_query="q") for n in
               ("Hãy chia sẻ nếu bạn từng mất dữ liệu vì ransomware!", "Vì sao?", "Vì chưa vá.", "Bạn nghĩ sao? Hãy chia sẻ!")]
     assert len(writer._open_loop_structure(scenes, "", None, 0)) == 4
+
+
+def test_a_short_without_a_closing_question_gets_one():
+    class Q:
+        name, tier = "groq:x", "strong"
+
+        def __init__(self):
+            self.prompts = []
+
+        def generate_json(self, prompt, schema):
+            self.prompts.append(prompt)
+            return json.dumps({"question": "Bạn nghĩ lỗ đen còn giấu bí mật gì?"})
+    from vidgen.models import Scene
+    scenes = [Scene(id=0, narration=n, visual_query="space") for n in ("Mở đầu.", "Vì sao?", "Vì trọng lực.")]
+    llm = Q()
+    out = writer.ensure_closing_question(scenes, "Lỗ đen", "vi", LLMChain([llm]))
+    assert [s.narration for s in out][-1] == "Bạn nghĩ lỗ đen còn giấu bí mật gì?" and len(out) == 4
+    assert writer.ensure_closing_question(out, "Lỗ đen", "vi", LLMChain([llm])) == out
+    assert len(llm.prompts) == 1                                         # already ends with a question: no call

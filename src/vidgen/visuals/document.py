@@ -38,6 +38,7 @@ PAPER, INK, MUTED = (243, 238, 227), (30, 30, 30), (125, 112, 95)
 MARK = (255, 212, 0, 150)         # highlighter yellow, ~60 % opaque
 LABEL = {"vi": ("TRÍCH TỪ NGUỒN", "Nguồn"), "en": ("FROM THE SOURCE", "Source")}
 _SENTENCE = re.compile(r"(?<=[.!?…])\s+")
+CLOSED = (".", "!", "?", "…")   # ends_with() already looks past closing quotes and brackets
 MONTHS = {m: i for i, m in enumerate(("january", "february", "march", "april", "may", "june", "july", "august",
                                       "september", "october", "november", "december"), 1)}
 _MONTH = "|".join(MONTHS)
@@ -119,7 +120,8 @@ def find_quote(narration: str, sources: list[SourceDoc], lang: str) -> Quote | N
         best: Quote | None = None
         for sentence in _SENTENCE.split(src.text):
             words = sentence.split()
-            if not 4 <= len(words) <= MAX_QUOTE_WORDS:
+            # passages are cut to a length: their last "sentence" can stop mid-way ("…that it is indeed a")
+            if not 4 <= len(words) <= MAX_QUOTE_WORDS or not ends_with(words[-1], CLOSED):
                 continue
             same_day = next(((a, b) for key, a, b in _dates(" ".join(words)) if key in dates), None)
             if same_day is not None:   # the whole date is the highlighted phrase

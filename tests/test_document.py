@@ -148,3 +148,12 @@ def test_a_date_in_the_narration_finds_the_same_date_written_out(src, phrase):
 def test_a_different_date_is_not_a_match():
     src = Source(title="W", url="u", lang="en", text="Intro text here. A patch was released on 14 March 2017 by Microsoft.")
     assert doc.find_quote("Ngày 12/5/2017, WannaCry bắt đầu lây lan.", [src], "vi") is None
+
+
+def test_a_sentence_cut_off_by_the_passage_is_never_quoted():
+    cut = Source(title="Black hole", url="u", lang="en",
+                 text="Intro text here. The image released in 2022 provided confirmation that it is indeed a")
+    whole = Source(title="Black hole", url="u2", lang="en",
+                   text="Intro text here. The image was released in 2022 by the EHT team, a first for this object.")
+    assert doc.find_quote("Năm 2022, ảnh được công bố.", [cut], "vi") is None
+    assert doc.find_quote("Năm 2022, ảnh được công bố.", [cut, whole], "vi").url == "u2"

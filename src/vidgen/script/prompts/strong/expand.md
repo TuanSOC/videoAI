@@ -17,6 +17,8 @@ Every figure, date, name, place and organisation must appear in the reference ma
 company or person it doesn't mention.
 - This is spoken aloud: never write URLs, domain names, file hashes, code or long IDs — describe them
   instead ("một tên miền dài vô nghĩa", "a long nonsense web address").
+- Speak the viewer's language: translate technical terms ("chân trời sự kiện", not "event horizon");
+  keep English only for proper names (EHT, WannaCry, Microsoft).
 
 Rules:
 - Keep the story order: a new scene must fit logically between its neighbours (cause before effect,
