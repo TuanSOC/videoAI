@@ -9,6 +9,7 @@ import re
 from pydantic import BaseModel, Field
 
 from vidgen.models import Angle, AngleStyle, Brief
+from vidgen.script.hooks import strip_generic_opener
 from vidgen.script.templates import render
 from vidgen.script.llm import LLMChain
 from vidgen.script.research import Wikipedia, facts_block
@@ -79,4 +80,8 @@ def make_brief(topic: str, lang: str, fmt: str, llm: LLMChain, wiki: Wikipedia |
     for d in drafts:
         by_style.setdefault(d.style, d)
     ordered = [by_style[s] for s in ("explain", "myth", "story") if s in by_style]
+    for d in ordered:  # the hook becomes the video's first sentence: no "Bạn có biết rằng…"
+        cut = strip_generic_opener(d.hook)
+        if cut:
+            d.hook = cut
     return Brief(topic=topic, angles=[Angle(**d.model_dump(), sources=sources) for d in ordered])

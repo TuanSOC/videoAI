@@ -10,9 +10,18 @@ $facts
 Rules:
 - Narration language: $lang_name. Natural spoken style, short sentences, no emojis, no hashtags, no stage directions.
 - Total narration: about $target_words words (≈$target_seconds seconds read aloud).
-- First sentence is the hook: a surprising claim or question that stops scrolling within 3 seconds. Put it in `hook` AND as the narration of the first scene.
-- Build curiosity, deliver 2-4 concrete, verifiable facts. Never invent statistics, dates or quotes; if unsure, stay general.
-- Last scene ends with a short question inviting comments.
+- Structure (this is what keeps people watching to the end):
+  1. Scene 1 = the hook, at most 12 words: a paradox, a mystery or a warning — a surprising but TRUE claim
+     from the reference material. Put it in `hook` AND as the narration of the first scene. Never open with
+     a generic line such as "Bạn có biết", "Hôm nay chúng ta", "Xin chào", "Trong video này", "Did you know",
+     "In this video", "Have you ever wondered".
+  2. Scene 2 = the open loop: pose ONE intriguing question the video will answer at the end. Put it in
+     `open_loop`.
+  3. Middle scenes: 2-4 concrete, verifiable facts that build toward the answer WITHOUT giving it away.
+  4. The second-to-last scene answers the open loop. Put that scene's number (counting from 1) in `payoff_scene`.
+  5. The last scene: one short question inviting comments (at most 12 words).
+- Never invent statistics, dates or quotes; if unsure, stay general. Write numbers, years and percentages as
+  digits ("3 trái tim", "năm 2013", "30%"), not in words.
 - Split into $scene_range scenes, 1-2 sentences each (max 25 words per scene).
 - `visual_query`: ALWAYS in English, ONE short phrase of 2-4 concrete filmable words for stock footage search (e.g. "stormy ocean aerial", "old ship wreck underwater"). No commas or lists, no abstract words, no names of real people.
 - `alt_queries`: 2 MORE English stock queries for the same scene, filmed differently: one close-up of a concrete object or action (e.g. "finger tapping phone screen"), one wider setting (e.g. "person at laptop in dark room"). Same rules as `visual_query`; show what is happening, not abstract ideas ("hacker" → "hooded person typing on laptop").

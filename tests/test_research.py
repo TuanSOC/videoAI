@@ -91,7 +91,7 @@ def test_writer_puts_facts_in_prompt_and_records_sources():
     src = rs.Source(title="Octopus", url="https://en.wikipedia.org/wiki/Octopus", lang="en", text=HEART)
     long_scene = {"narration": " ".join(["từ"] * 20) + ".", "visual_query": "octopus",
                   "visual_type": "stock", "ai_prompt": ""}
-    fake = FakeLLM({"title": "t", "hook": "h", "scenes": [long_scene] * 12})
+    fake = FakeLLM({"title": "t", "hook": "h", "open_loop": "", "payoff_scene": 0, "scenes": [long_scene] * 12})
     script = writer.generate("x", "short", "vi", get_settings().preset("short"), LLMChain([fake]), [src])
     assert "Use ONLY facts" in fake.prompts[0] and "systemic heart stops" in fake.prompts[0]
     assert [s.url for s in script.sources] == ["https://en.wikipedia.org/wiki/Octopus"]
@@ -100,7 +100,7 @@ def test_writer_puts_facts_in_prompt_and_records_sources():
 def test_writer_without_sources_asks_to_stay_general():
     long_scene = {"narration": " ".join(["từ"] * 20) + ".", "visual_query": "q",
                   "visual_type": "stock", "ai_prompt": ""}
-    fake = FakeLLM({"title": "t", "hook": "h", "scenes": [long_scene] * 12})
+    fake = FakeLLM({"title": "t", "hook": "h", "open_loop": "", "payoff_scene": 0, "scenes": [long_scene] * 12})
     script = writer.generate("x", "short", "vi", get_settings().preset("short"), LLMChain([fake]))
     assert "No reference sources" in fake.prompts[0] and script.sources == []
 

@@ -31,6 +31,8 @@ def scene(narration, vtype="stock", q="ocean waves"):
 
 SHORT = {
     "title": "Bermuda",
+    "open_loop": "",
+    "payoff_scene": 0,
     "hook": "Ships vanish here.",
     "scenes": [scene("Ships vanish here."), scene("Fact one.", "ai_video"),
                scene("Fact two.", "ai_video"), scene("What do you think?")],
@@ -151,7 +153,8 @@ def test_short_draft_keeps_first_when_retry_is_not_longer():
 
 
 def test_long_enough_draft_is_not_retried():
-    long_draft = {"title": "t", "hook": "h", "scenes": [scene(" ".join(["từ"] * 20) + ".")] * 12}
+    long_draft = {"title": "t", "hook": "h", "open_loop": "", "payoff_scene": 0,
+                  "scenes": [scene("Con tàu biến mất không dấu vết.")] + [scene(" ".join(["từ"] * 20) + ".")] * 11}
     fake = FakeProvider("fake", [long_draft])
     writer.generate("x", "short", "vi", get_settings().preset("short"), LLMChain([fake]))
     assert len(fake.prompts) == 1

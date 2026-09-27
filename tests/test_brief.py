@@ -113,7 +113,7 @@ def test_writer_uses_angle_title_hook_and_points():
     angle = Angle(style="myth", title="Tiêu đề của tôi", hook="Bạn tưởng biển mặn vì muối mưa?",
                   key_points=["Muối từ đá", "Sông mang khoáng chất"])
     scene = {"narration": " ".join(["từ"] * 20) + ".", "visual_query": "sea", "visual_type": "stock", "ai_prompt": ""}
-    llm = SchemaLLM(ShortDraft={"title": "LLM title", "hook": "h", "scenes": [scene] * 12})
+    llm = SchemaLLM(ShortDraft={"title": "LLM title", "hook": "h", "open_loop": "", "payoff_scene": 0, "scenes": [scene] * 12})
     script = writer.generate("x", "short", "vi", get_settings().preset("short"), LLMChain([llm]), angle=angle)
     prompt = llm.prompts[0][1]
     assert "Bạn tưởng biển mặn vì muối mưa?" in prompt and "- Sông mang khoáng chất" in prompt

@@ -1,9 +1,9 @@
 ---
 phase: 2
-title: "Open Loop Prompts"
-status: pending
+title: Open Loop Prompts
+status: completed
 priority: P2
-effort: "3h"
+effort: 3h
 dependencies: []
 ---
 
@@ -41,3 +41,14 @@ by ~5 s and answered near the end.
 ## Risk Assessment
 - 8B model may ignore structure → validation + single retry; honest: retention >60 % can't be
   guaranteed by prompts.
+
+## Results (2026-09-27)
+- 285 tests green (tests/test_hooks.py: 15 new).
+- Live, 3 vi topics (Bermuda, honey, home cameras), final run: all 3 follow hook → open question (scene 2)
+  → answer (second-to-last) → short CTA; no generic opener; numbers as digits.
+- What it took (the 8B model ignored the prompt alone): generic openers cut in code (no LLM call);
+  angle hook inserted/replaces a paraphrase; `open_loop`/`payoff_scene` made REQUIRED in the schema
+  (optional → the model omitted them); the answer scene moved before the CTA; expansion never inserts
+  after the answer.
+- Limits: a long descriptive hook the rewrite can't shorten is kept (Bermuda: 13 words, factual); the
+  model sometimes labels a question as the "answer". Retention itself can't be measured here.
