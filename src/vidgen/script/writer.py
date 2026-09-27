@@ -213,6 +213,8 @@ def rewrite_one(script: Script, scene: Scene, prev: str, nxt: str, instruction: 
     current_words = len(scene.narration.split())
     wants_shorter = any(h in instr.lower() for h in SHORTER_HINTS)
     limit = min(MAX_SCENE_WORDS, current_words - 1) if wants_shorter and current_words > 3 else MAX_SCENE_WORDS
+    if scene.id == script.scenes[0].id:  # the hook: it has to land in ~3 s
+        limit = min(limit, hooks.HOOK_MAX_WORDS)
     prompt = templates.prompt(
         "rewrite_scene.md", title=script.title, lang_name=LANG_NAMES[script.lang],
         angle=angle_block(angle, opening=scene.id == script.scenes[0].id),
@@ -230,6 +232,7 @@ def rewrite_one(script: Script, scene: Scene, prev: str, nxt: str, instruction: 
                 out = retry
         except Exception as e:  # the first answer is still usable
             log.warning("shorter rewrite failed: %s", e)
+    out = out.model_copy(update={"narration": plain(out.narration)})
     if not out.visual_query.isascii():  # seen live: a Vietnamese query, useless for stock search
         out = out.model_copy(update={"visual_query": scene.visual_query})
     return out.model_copy(update={"alt_queries": clean_alt_queries(out.visual_query, out.alt_queries)})

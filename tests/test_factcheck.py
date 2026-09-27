@@ -131,3 +131,23 @@ def test_notes_that_confirm_a_scene_are_not_flags():
     assert [i["note"] for i in fact_check(SCRIPT, [SRC], LLMChain([llm])).issues] == [
         "Sai ngày: tài liệu nói năm 2016.", "Chính phủ không được nhắc trong tài liệu.", "Đúng, nhưng năm là 2016.",
         "Chính xác hơn là 2 tim.", "True, but the figure is wrong."]
+
+
+def test_rewriting_the_hook_keeps_it_hook_sized_and_plain():
+    long = {"narration": "Imagine UN chief Kurt Waldheim and six\u2011year\u2011old Nick Sagan each sending a greeting to alien listeners.",
+            "visual_query": "q", "visual_type": "stock", "ai_prompt": ""}
+    short = {"narration": "A UN chief and a six\u2011year\u2011old both greeted aliens.", "visual_query": "q",
+             "visual_type": "stock", "ai_prompt": ""}
+
+    class Seq:
+        name = "seq"
+
+        def __init__(self):
+            self.replies, self.prompts = [long, short], []
+
+        def generate_json(self, prompt, schema):
+            self.prompts.append(prompt)
+            return json.dumps(self.replies.pop(0))
+    llm = Seq()
+    out = writer.rewrite_one(SCRIPT, SCRIPT.scenes[0], "", "Sau.", "make it punchier", [SRC], None, LLMChain([llm]))
+    assert out.narration == "A UN chief and a six-year-old both greeted aliens." and len(llm.prompts) == 2
