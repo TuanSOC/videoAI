@@ -38,12 +38,13 @@ class LLMConfig(BaseModel):
     "ollama:qwen3:8b"); a bare "ollama"/"gemini" uses ollama_model/gemini_model."""
     model_config = ConfigDict(extra="forbid")  # a typo in config.yaml is an error, not ignored
     creative: list[str] = ["ollama"]   # briefs, scripts, rewrites, hooks, metadata, topic ideas
-    checker: list[str] = ["ollama"]    # fact-check and clip judging: kept apart from the writer, and local
+    checker: list[str] = ["ollama"]    # fact-check
+    judge: list[str] = ["ollama"]      # clip tie-breaks: many small calls per video, kept local
     ollama_model: str = "qwen3:8b"
     ollama_think: bool = False
     gemini_model: str = "gemini-2.5-flash"
 
-    @field_validator("creative", "checker")
+    @field_validator("creative", "checker", "judge")
     @classmethod
     def _specs(cls, specs: list[str]) -> list[str]:
         for spec in specs:
@@ -55,7 +56,7 @@ class LLMConfig(BaseModel):
         return specs
 
     def uses(self, name: str) -> bool:
-        return any(spec.partition(":")[0] == name for spec in self.creative + self.checker)
+        return any(spec.partition(":")[0] == name for spec in self.creative + self.checker + self.judge)
 
 
 class VisionConfig(BaseModel):

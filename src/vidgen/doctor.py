@@ -91,7 +91,7 @@ def run_checks(s: Settings) -> list[Check]:
         if sec.gemini_api_key:
             usable.append("gemini")
     checks.append(Check("LLM available", bool(usable), ", ".join(usable) if usable
-                        else "no usable provider in llm.creative/llm.checker"))
+                        else "no usable provider in llm.creative/checker/judge"))
 
     fonts = list((ROOT / "assets" / "fonts").glob("*.ttf"))
     checks.append(Check("caption font", bool(fonts), fonts[0].name if fonts else "add a .ttf to assets/fonts/"))

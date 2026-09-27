@@ -604,7 +604,7 @@ def llm_judge(s: Settings) -> Judge | None:
     from vidgen.script.llm import default_chain
 
     try:
-        llm = default_chain(s, "checker")
+        llm = default_chain(s, "judge")
     except Exception:
         return None
 

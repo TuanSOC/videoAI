@@ -130,6 +130,7 @@ def test_roles_pick_their_chains_and_skip_groq_without_a_key():
     assert [p.name for p in L.default_chain(with_key, "checker").providers] == ["ollama:qwen3:8b"]
     assert [p.name for p in L.default_chain(settings(specs)).providers] == ["ollama:qwen3:8b"]   # $0 path as before
     assert [p.tier for p in L.default_chain(with_key).providers] == ["strong", "strong", "base"]
+    assert [p.name for p in L.default_chain(with_key, "judge").providers] == ["ollama:qwen3:8b"]
 
 
 def test_config_rejects_unknown_providers_and_the_old_key():
