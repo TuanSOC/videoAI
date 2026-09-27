@@ -117,6 +117,18 @@ def last_modified(d: Path) -> float:
     return newest
 
 
+def current_factcheck(d: Path, script: Script | None) -> dict | None:
+    """factcheck.json minus flags on sentences the user has since edited or removed, with scene ids
+    re-pointed at the current numbering (saving renumbers scenes; flags are keyed by narration)."""
+    path = d / "factcheck.json"
+    if not path.exists():
+        return None
+    fc = json.loads(path.read_text(encoding="utf-8"))
+    ids = {sc.narration: sc.id for sc in script.scenes} if script else {}
+    fc["issues"] = [{**i, "scene_id": ids[i["narration"]]} for i in fc.get("issues", []) if i.get("narration") in ids]
+    return fc
+
+
 def create_app(settings: Callable[[], Settings] = get_settings,
                script_runner: ScriptRunner = pipeline.write_script,
                stage_runner: StageRunner = pipeline.run_stages,
@@ -288,9 +300,10 @@ def create_app(settings: Callable[[], Settings] = get_settings,
                     src["text"] = src["text"][:SOURCE_PREVIEW_CHARS]
         info = summary(d)
         actual = pipeline.actual_duration(d)
+        script = read_json_model(d / "script.json", Script)
         return {
             **info,
-            "script": read_json_model(d / "script.json", Script),
+            "script": script,
             "brief": brief_view if brief is not None else None,
             # a script written without any source: its facts are unchecked (research found nothing / failed)
             "sources_missing": brief is not None and (d / "script.json").exists() and not brief.chosen_sources(),
@@ -299,8 +312,7 @@ def create_app(settings: Callable[[], Settings] = get_settings,
             "target_seconds": list(settings().preset(info["format"]).target_seconds),
             "wps": WORDS_PER_SECOND[info["lang"]],
             "actual_seconds": actual,
-            "factcheck": (json.loads((d / "factcheck.json").read_text(encoding="utf-8"))
-                          if (d / "factcheck.json").exists() else None),
+            "factcheck": current_factcheck(d, script),
             "metadata": json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else None,
             "timings": pipeline.load_state(d).get("timings", {}),
             "job": job.to_dict() if job else None,

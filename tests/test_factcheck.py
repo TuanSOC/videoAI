@@ -102,3 +102,20 @@ def test_rewrite_keeps_only_english_alt_queries():
                 "visual_type": "stock", "ai_prompt": ""})
     out = writer.rewrite_one(SCRIPT, SCRIPT.scenes[0], "", "", None, [SRC], None, LLMChain([llm]))
     assert out.alt_queries == ["octopus arm close up"]
+
+
+def test_factcheck_view_drops_flags_on_edited_sentences_and_follows_renumbering(tmp_path):
+    import json
+
+    from vidgen.models import Scene, Script
+    from vidgen.web.app import current_factcheck
+
+    (tmp_path / "factcheck.json").write_text(json.dumps({"checked": True, "issues": [
+        {"scene_id": 2, "narration": "Câu đã sửa.", "note": "x"},
+        {"scene_id": 5, "narration": "Câu còn nguyên.", "note": "y"}]}), encoding="utf-8")
+    script = Script(title="t", hook="h", lang="vi", format="short",
+                    scenes=[Scene(id=1, narration="Mở.", visual_query="q"),
+                            Scene(id=2, narration="Câu còn nguyên.", visual_query="q")])
+    fc = current_factcheck(tmp_path, script)
+    assert fc["checked"] and fc["issues"] == [{"scene_id": 2, "narration": "Câu còn nguyên.", "note": "y"}]
+    assert current_factcheck(tmp_path / "none", script) is None
