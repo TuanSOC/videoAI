@@ -157,3 +157,16 @@ def test_a_sentence_cut_off_by_the_passage_is_never_quoted():
                    text="Intro text here. The image was released in 2022 by the EHT team, a first for this object.")
     assert doc.find_quote("Năm 2022, ảnh được công bố.", [cut], "vi") is None
     assert doc.find_quote("Năm 2022, ảnh được công bố.", [cut, whole], "vi").url == "u2"
+
+
+def test_abbreviations_do_not_end_a_sentence():
+    src = Source(title="Voyager", url="u", lang="en", text="Intro text here. The record has greetings in 55 languages, "
+                 "including one in English by U.N. Secretary-General Kurt Waldheim. Another sentence follows.")
+    q = doc.find_quote("It has greetings in 55 languages.", [src], "en")
+    assert q.text.endswith("Kurt Waldheim.")
+
+
+def test_the_highlight_does_not_end_on_a_little_word():
+    src = Source(title="Voyager", url="u", lang="en", text="Intro text here. It holds spoken greetings in 55 ancient and modern languages.")
+    q = doc.find_quote("Greetings in 55 languages.", [src], "en")
+    assert q.text.split()[q.start:q.end] == ["55", "ancient"]

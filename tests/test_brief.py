@@ -165,3 +165,12 @@ def test_regenerating_angles_keeps_the_current_scripts_sources(tmp_path, monkeyp
     assert [s.url for s in b.chosen_sources()] == ["u-old"]                    # unticked source stays out
     pipeline.choose_angle(tmp_path, 0)
     assert pipeline.load_brief(tmp_path).chosen_angle().title == "New"        # a new pick takes over
+
+
+def test_angle_text_gets_plain_typography():
+    llm = LLMChain([type("P", (), {"name": "groq:x", "tier": "strong", "generate_json": lambda self, p, s: json.dumps(
+        {"angles": [{"style": st, "title": "Six\u2011Year\u2011Old voices", "hook": "A 12\u2011inch disc.",
+                     "key_points": ["k\u00a0p", "q"], "keywords": ["x"]} for st in ("explain", "myth", "story")]})})()])
+    brief = br.make_brief("x", "en", "short", llm, research=False)
+    a = brief.angles[0]
+    assert (a.title, a.hook, a.key_points) == ("Six-Year-Old voices", "A 12-inch disc.", ["k p", "q"])

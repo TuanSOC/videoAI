@@ -5,6 +5,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from vidgen.fsutil import write_atomic
+from vidgen.text import plain
 from vidgen.models import Asset, Script
 from vidgen.script.llm import LLMChain
 from vidgen.config import LANG_NAMES
@@ -76,7 +77,7 @@ def generate_metadata(script: Script, assets: list[Asset], llm: LLMChain, music_
         shorts_rule="; include #shorts" if script.format == "short" else "",
     ), LLMMetadata)
 
-    return _compose(llm_meta.title.strip()[:TITLE_MAX], llm_meta.description.strip(), llm_meta.tags,
+    return _compose(plain(llm_meta.title.strip())[:TITLE_MAX], plain(llm_meta.description).strip(), llm_meta.tags,
                     normalize_hashtags(llm_meta.hashtags, script.format == "short"), script, assets, music_credit)
 
 

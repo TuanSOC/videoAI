@@ -10,7 +10,7 @@ from vidgen.assemble.music import MOODS
 from vidgen.config import LANG_NAMES, Format, FormatPreset, Lang
 from vidgen.models import Angle, Scene, Script, SourceRef, VisualType
 from vidgen.script import hooks
-from vidgen.text import bare, ends_with
+from vidgen.text import bare, ends_with, plain
 from vidgen.script import templates
 from vidgen.script.llm import LLMChain, LLMError
 from vidgen.script.research import Source, facts_block
@@ -109,7 +109,7 @@ def generate(topic: str, fmt: Format, lang: Lang, preset: FormatPreset, llm: LLM
         title, hook, mood, scenes = _generate_long(topic, lang, preset, llm, seconds, words, ctx, body)
     if angle is not None:
         title = angle.title
-    return Script(title=title.translate(TYPOGRAPHY), hook=hook.translate(TYPOGRAPHY), lang=lang, format=fmt,
+    return Script(title=plain(title), hook=plain(hook), lang=lang, format=fmt,
                   mood=normalize_mood(mood),
                   scenes=postprocess(scenes, preset.max_ai_video),
                   sources=[SourceRef(title=s.title, url=s.url) for s in sources])
@@ -459,7 +459,6 @@ def default_ai_prompt(query: str) -> str:
     return f"photorealistic cinematic shot of {query}, natural lighting"
 
 
-TYPOGRAPHY = str.maketrans({"\u2010": "-", "\u2011": "-", "\u2012": "-", "\u00a0": " ", "\u202f": " "})
 
 
 VI_LETTERS = re.compile("[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]", re.I)
@@ -493,7 +492,7 @@ def postprocess(scenes: list[Scene], max_ai_video: int) -> list[Scene]:
         if vtype != "stock" and not ai_prompt:
             ai_prompt = default_ai_prompt(query)
         # typographic hyphens/spaces from hosted models ("14\u20114\u20112017") trip TTS and number matching
-        for i, part in enumerate(split_narration(scene.narration.translate(TYPOGRAPHY))):
+        for i, part in enumerate(split_narration(plain(scene.narration))):
             out.append(scene.model_copy(update={
                 "id": len(out) + 1,
                 "visual_query": query,

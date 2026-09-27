@@ -38,7 +38,12 @@ PAPER, INK, MUTED = (243, 238, 227), (30, 30, 30), (125, 112, 95)
 MARK = (255, 212, 0, 150)         # highlighter yellow, ~60 % opaque
 LABEL = {"vi": ("TRÍCH TỪ NGUỒN", "Nguồn"), "en": ("FROM THE SOURCE", "Source")}
 _SENTENCE = re.compile(r"(?<=[.!?…])\s+")
-CLOSED = (".", "!", "?", "…")   # ends_with() already looks past closing quotes and brackets
+CLOSED = (".", "!", "?", "…")
+# "U.N. Secretary-General" is one sentence: a split right after an abbreviation is undone (seen live)
+ABBREVIATION = re.compile(r"(?:\b(?:[A-Z]\.){1,3}|\b(?:Dr|Mr|Mrs|Ms|St|Jr|Sr|Mt|No|vs|Inc|Ltd|Co)\.)$")
+# a highlight never ends on a little word ("55 ancient and")
+LITTLE = {"and", "or", "of", "the", "a", "an", "to", "in", "on", "at", "with", "by", "for",
+          "và", "hoặc", "của", "là", "các", "những", "với", "trong", "cho", "tại"}   # ends_with() already looks past closing quotes and brackets
 MONTHS = {m: i for i, m in enumerate(("january", "february", "march", "april", "may", "june", "july", "august",
                                       "september", "october", "november", "december"), 1)}
 _MONTH = "|".join(MONTHS)
@@ -109,6 +114,16 @@ def _compounds(sentence: str) -> set[tuple[str, str]]:
     return out
 
 
+def _sentences(text: str) -> list[str]:
+    out: list[str] = []
+    for part in _SENTENCE.split(text):
+        if out and ABBREVIATION.search(out[-1]):
+            out[-1] = f"{out[-1]} {part}"
+        else:
+            out.append(part)
+    return out
+
+
 def find_quote(narration: str, sources: list[SourceDoc], lang: str) -> Quote | None:
     """The shortest source sentence containing one of the narration's figures (same-language sources
     first; "150.000" and "150,000" are the same figure), or None."""
@@ -118,7 +133,7 @@ def find_quote(narration: str, sources: list[SourceDoc], lang: str) -> Quote | N
         return None
     for src in sorted(sources, key=lambda s: s.lang != lang):
         best: Quote | None = None
-        for sentence in _SENTENCE.split(src.text):
+        for sentence in _sentences(src.text):
             words = sentence.split()
             # passages are cut to a length: their last "sentence" can stop mid-way ("…that it is indeed a")
             if not 4 <= len(words) <= MAX_QUOTE_WORDS or not ends_with(words[-1], CLOSED):
@@ -138,6 +153,8 @@ def find_quote(narration: str, sources: list[SourceDoc], lang: str) -> Quote | N
                     if (end < len(words) and not ends_with(words[end - 1], CLAUSE_END)
                             and (bare(words[end - 1]), bare(words[end])) in glue):
                         end += 1
+                    while end - i > 1 and bare(words[end - 1]) in LITTLE:
+                        end -= 1
                     if best is None or len(words) < len(best.text.split()):
                         best = Quote(" ".join(words), i, end, src.title, src.url, src.lang)
                     break

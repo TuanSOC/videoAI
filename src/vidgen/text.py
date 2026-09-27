@@ -17,6 +17,15 @@ def bare(token: str) -> str:
     return "".join(ch for ch in unicodedata.normalize("NFC", token).casefold() if ch.isalnum())
 
 
+TYPOGRAPHY = str.maketrans({"\u2010": "-", "\u2011": "-", "\u2012": "-", "\u00a0": " ", "\u202f": " "})
+
+
+def plain(text: str) -> str:
+    """Typographic hyphens/spaces from hosted models ("12\u2011inch") → plain ones: they trip TTS, number
+    matching and read oddly in titles."""
+    return text.translate(TYPOGRAPHY)
+
+
 def is_number(token: str) -> bool:
     return any(ch.isdigit() for ch in token)
 
