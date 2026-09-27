@@ -245,7 +245,7 @@ def check_facts(out_dir: Path, s: Settings) -> None:
 
     sources, _ = _sources_and_angle(out_dir)
     try:
-        result = fact_check(Job(out_dir, s).read_script(), sources, default_chain(s))
+        result = fact_check(Job(out_dir, s).read_script(), sources, default_chain(s, "checker"))
     except Exception as e:
         log.warning("fact check failed: %s", e)
         result = FactCheck(checked=False)

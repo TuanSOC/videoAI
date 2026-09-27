@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -30,12 +30,32 @@ class FormatPreset(BaseModel):
         return "portrait" if self.height > self.width else "landscape"
 
 
+LLM_PROVIDERS = ("groq", "ollama", "gemini")
+
+
 class LLMConfig(BaseModel):
+    """Provider chains per role, tried in order. A spec is "name" or "name:model" ("groq:openai/gpt-oss-120b",
+    "ollama:qwen3:8b"); a bare "ollama"/"gemini" uses ollama_model/gemini_model."""
     model_config = ConfigDict(extra="forbid")  # a typo in config.yaml is an error, not ignored
-    providers: list[Literal["ollama", "gemini"]] = ["ollama"]
+    creative: list[str] = ["ollama"]   # briefs, scripts, rewrites, hooks, metadata, topic ideas
+    checker: list[str] = ["ollama"]    # fact-check and clip judging: kept apart from the writer, and local
     ollama_model: str = "qwen3:8b"
     ollama_think: bool = False
     gemini_model: str = "gemini-2.5-flash"
+
+    @field_validator("creative", "checker")
+    @classmethod
+    def _specs(cls, specs: list[str]) -> list[str]:
+        for spec in specs:
+            name, _, model = spec.partition(":")
+            if name not in LLM_PROVIDERS:
+                raise ValueError(f"unknown LLM provider {spec!r} (one of {', '.join(LLM_PROVIDERS)})")
+            if name == "groq" and not model:
+                raise ValueError("groq needs a model: groq:<model>")
+        return specs
+
+    def uses(self, name: str) -> bool:
+        return any(spec.partition(":")[0] == name for spec in self.creative + self.checker)
 
 
 class VisionConfig(BaseModel):
@@ -91,6 +111,7 @@ class Secrets(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT / ".env", extra="ignore")
 
     gemini_api_key: str = ""
+    groq_api_key: str = ""
     pexels_api_key: str = ""
     pixabay_api_key: str = ""
     comfyui_url: str = "http://127.0.0.1:8188"

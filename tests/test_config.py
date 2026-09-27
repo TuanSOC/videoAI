@@ -44,7 +44,7 @@ def test_doctor_ollama_down_is_not_fatal_when_gemini_usable(monkeypatch):
     from vidgen import doctor
 
     s = get_settings().model_copy(deep=True)
-    s.pipeline.llm.providers = ["ollama", "gemini"]
+    s.pipeline.llm.creative = s.pipeline.llm.checker = ["ollama", "gemini"]
     s.secrets.gemini_api_key = "k"
     monkeypatch.setattr(doctor, "_ollama_models", lambda url: None)  # Ollama offline
     monkeypatch.setattr(doctor, "_http_ok", lambda url: False)
@@ -57,7 +57,7 @@ def test_doctor_requires_some_llm(monkeypatch):
     from vidgen import doctor
 
     s = get_settings().model_copy(deep=True)
-    s.pipeline.llm.providers = ["ollama"]
+    s.pipeline.llm.creative = s.pipeline.llm.checker = ["ollama"]
     monkeypatch.setattr(doctor, "_ollama_models", lambda url: [])  # up, but model not pulled
     monkeypatch.setattr(doctor, "_http_ok", lambda url: False)
     checks = {c.name: c for c in doctor.run_checks(s)}

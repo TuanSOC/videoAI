@@ -52,7 +52,7 @@ def test_pipeline_check_facts_writes_file(tmp_path, monkeypatch):
     (tmp_path / pipeline.BRIEF_FILE).write_text(brief.model_dump_json(), encoding="utf-8")
     (tmp_path / "script.json").write_text(SCRIPT.model_dump_json(), encoding="utf-8")
     llm = Fake({"issues": [{"id": 2, "note": "sai"}]})
-    monkeypatch.setattr("vidgen.script.llm.default_chain", lambda s: LLMChain([llm]))
+    monkeypatch.setattr("vidgen.script.llm.default_chain", lambda s, role="creative": LLMChain([llm]))
     pipeline.check_facts(tmp_path, get_settings())
     saved = json.loads((tmp_path / "factcheck.json").read_text(encoding="utf-8"))
     assert saved["checked"] and saved["issues"][0]["scene_id"] == 2

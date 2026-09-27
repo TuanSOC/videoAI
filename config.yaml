@@ -21,8 +21,10 @@ voices:
 voice_rate: "+8%"   # edge-tts speaking rate ("+0%" = default pace)
 
 llm:
-  # tried in order; "gemini" may bill once its free quota is exceeded, so it's off by default
-  providers: [ollama]
+  # tried in order per role; groq entries are skipped without GROQ_API_KEY (.env), leaving the local $0 path.
+  # "gemini" may bill once its free quota is exceeded, so it's off by default
+  creative: ["groq:openai/gpt-oss-120b", "groq:qwen/qwen3.8-27b", ollama]
+  checker: [ollama]   # fact-check + clip judge: a different model from the writer, local
   ollama_model: qwen3:8b
   ollama_think: false   # qwen3 "thinking" is slow and not needed for JSON scripts
   gemini_model: gemini-2.5-flash

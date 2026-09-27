@@ -69,7 +69,7 @@ def run_checks(s: Settings) -> list[Check]:
 
     # per-provider rows are warnings; "LLM available" below is the one required gate
     usable: list[str] = []
-    if "ollama" in llm.providers:
+    if llm.uses("ollama"):
         if models is None:
             checks.append(Check("Ollama", False, "offline → open the Ollama app or run `ollama serve`",
                                 required=False))
@@ -79,13 +79,19 @@ def run_checks(s: Settings) -> list[Check]:
         else:
             checks.append(Check("Ollama", True, f"{llm.ollama_model} ready"))
             usable.append("ollama")
-    if "gemini" in llm.providers:
+    if llm.uses("groq"):
+        checks.append(Check("GROQ_API_KEY", bool(sec.groq_api_key),
+                            "set (free tier)" if sec.groq_api_key else "missing → creative tasks use local Ollama",
+                            required=False))
+        if sec.groq_api_key:
+            usable.append("groq")
+    if llm.uses("gemini"):
         checks.append(Check("GEMINI_API_KEY", bool(sec.gemini_api_key),
                             "set (may bill past free quota)" if sec.gemini_api_key else "missing", required=False))
         if sec.gemini_api_key:
             usable.append("gemini")
     checks.append(Check("LLM available", bool(usable), ", ".join(usable) if usable
-                        else "no usable provider in llm.providers"))
+                        else "no usable provider in llm.creative/llm.checker"))
 
     fonts = list((ROOT / "assets" / "fonts").glob("*.ttf"))
     checks.append(Check("caption font", bool(fonts), fonts[0].name if fonts else "add a .ttf to assets/fonts/"))

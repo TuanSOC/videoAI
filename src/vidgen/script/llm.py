@@ -1,8 +1,11 @@
-"""LLM providers returning JSON validated against a Pydantic model. Gemini first, Ollama fallback."""
+"""LLM providers returning JSON validated against a Pydantic model, chained per role (config llm.creative /
+llm.checker): hosted models first when a key is set, local Ollama as the $0 fallback."""
 
+import copy
 import json
 import logging
-from typing import Protocol, TypeVar
+import time
+from typing import Callable, Protocol, TypeVar
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -19,14 +22,16 @@ class LLMError(RuntimeError):
 
 class LLMProvider(Protocol):
     name: str
+    tier: str   # "strong" (hosted, large) or "base" (local 8B): picks the prompt variant (templates.render)
 
     def generate_json(self, prompt: str, schema: type[BaseModel]) -> str: ...
 
 
 class GeminiProvider:
-    name = "gemini"
+    tier = "strong"
 
     def __init__(self, api_key: str, model: str):
+        self.name = f"gemini:{model}"
         from google import genai
 
         self._client = genai.Client(api_key=api_key)
@@ -47,10 +52,76 @@ class GeminiProvider:
         return resp.text or ""
 
 
+def strict_schema(schema: type[BaseModel]) -> dict:
+    """The JSON schema in OpenAI strict form: every object closed and every property required (fields with a
+    default just get filled in by the model), no "default" keys."""
+    out = copy.deepcopy(schema.model_json_schema())
+
+    def close(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object" and "properties" in node:
+                node["additionalProperties"] = False
+                node["required"] = list(node["properties"])
+                for prop in node["properties"].values():
+                    prop.pop("default", None)
+            for v in node.values():
+                close(v)
+        elif isinstance(node, list):
+            for v in node:
+                close(v)
+    close(out)
+    return out
+
+
+class GroqProvider:
+    """Groq's OpenAI-compatible API (free tier: ~1000 requests/day, 8000 tokens/minute per model). A short
+    wait advised by 429 is honoured; a long one (daily cap) hands over to the next provider."""
+    tier = "strong"
+    URL = "https://api.groq.com/openai/v1/chat/completions"
+    RATE_WAIT_MAX = 65.0
+    RATE_WAITS = 2
+
+    def __init__(self, api_key: str, model: str, sleep: Callable[[float], None] | None = None):
+        self.name = f"groq:{model}"
+        self._key = api_key
+        self._model = model
+        self._sleep = sleep or time.sleep
+
+    def _post(self, prompt: str, response_format: dict) -> httpx.Response:
+        body = {"model": self._model, "messages": [{"role": "user", "content": prompt}],
+                "response_format": response_format, "temperature": 0.7}
+        if self._model.startswith("openai/gpt-oss"):
+            body["reasoning_effort"] = "low"   # reasoning tokens count against the per-minute budget
+        for n in range(self.RATE_WAITS + 1):
+            resp = httpx.post(self.URL, json=body, headers={"Authorization": f"Bearer {self._key}"}, timeout=120)
+            if resp.status_code != 429:
+                return resp
+            wait = float(resp.headers.get("retry-after") or self.RATE_WAIT_MAX + 1)
+            if wait > self.RATE_WAIT_MAX or n == self.RATE_WAITS:
+                raise LLMError(f"Groq rate limit ({self._model}), retry in {wait:.0f}s")
+            log.info("groq rate limit, waiting %.0fs", wait)
+            self._sleep(wait)
+        raise AssertionError("unreachable")
+
+    def generate_json(self, prompt: str, schema: type[BaseModel]) -> str:
+        resp = self._post(prompt, {"type": "json_schema", "json_schema": {
+            "name": schema.__name__, "strict": True, "schema": strict_schema(schema)}})
+        if resp.status_code == 400:   # a schema shape the model's strict mode doesn't take: plain JSON mode
+            log.warning("groq %s rejected the schema, using json_object mode", self._model)
+            resp = self._post(f"{prompt}\n\nAnswer with one JSON object matching this JSON schema:\n"
+                              f"{json.dumps(schema.model_json_schema())}", {"type": "json_object"})
+        if resp.status_code in (401, 403):
+            raise LLMError("Groq API key invalid or not allowed (GROQ_API_KEY in .env)")
+        if resp.status_code != 200:
+            raise LLMError(f"Groq {resp.status_code}: {resp.text[:300]}")
+        return resp.json()["choices"][0]["message"]["content"]
+
+
 class OllamaProvider:
-    name = "ollama"
+    tier = "base"
 
     def __init__(self, url: str, model: str, think: bool = False):
+        self.name = f"ollama:{model}"
         self._url = url.rstrip("/")
         self._model = model
         self._think = think
@@ -85,6 +156,8 @@ class LLMChain:
             raise LLMError("No LLM provider configured: check llm.providers in config.yaml")
         self.providers = providers
         self.retries = retries
+        self.last_provider = ""   # who answered the last generate() ("groq:openai/gpt-oss-120b", ...)
+        self.fallback = False     # True when that was not the first provider
 
     def generate(self, prompt: str, schema: type[T]) -> T:
         errors: list[str] = []
@@ -92,7 +165,9 @@ class LLMChain:
             for attempt in range(1, self.retries + 2):
                 try:
                     raw = provider.generate_json(prompt, schema)
-                    return schema.model_validate(json.loads(raw))
+                    out = schema.model_validate(json.loads(raw))
+                    self.last_provider, self.fallback = provider.name, provider is not self.providers[0]
+                    return out
                 except (json.JSONDecodeError, ValidationError) as e:
                     errors.append(f"{provider.name}#{attempt}: invalid output: {e}")
                     log.warning("%s returned invalid JSON (attempt %d)", provider.name, attempt)
@@ -103,13 +178,17 @@ class LLMChain:
         raise LLMError("All LLM providers failed:\n" + "\n".join(errors))
 
 
-def default_chain(s: Settings) -> LLMChain:
-    """Providers in config order (`llm.providers`). Gemini is skipped when no key is set."""
+def default_chain(s: Settings, role: str = "creative") -> LLMChain:
+    """The role's providers in config order (`llm.creative` / `llm.checker`); hosted ones without a key are
+    skipped, so with no keys this is the local Ollama chain."""
     cfg = s.pipeline.llm
     providers: list[LLMProvider] = []
-    for name in cfg.providers:
+    for spec in getattr(cfg, role):
+        name, _, model = spec.partition(":")
         if name == "ollama":
-            providers.append(OllamaProvider(s.secrets.ollama_url, cfg.ollama_model, cfg.ollama_think))
+            providers.append(OllamaProvider(s.secrets.ollama_url, model or cfg.ollama_model, cfg.ollama_think))
+        elif name == "groq" and s.secrets.groq_api_key:
+            providers.append(GroqProvider(s.secrets.groq_api_key, model))
         elif name == "gemini" and s.secrets.gemini_api_key:
-            providers.append(GeminiProvider(s.secrets.gemini_api_key, cfg.gemini_model))
+            providers.append(GeminiProvider(s.secrets.gemini_api_key, model or cfg.gemini_model))
     return LLMChain(providers)
