@@ -566,3 +566,17 @@ def test_failed_extend_does_not_mark_the_video_broken(env):
     job = JobStatus(slug=slug, kind="extend", status="error", error="đã đủ dài", out_dir=s.pipeline.output_dir / slug)
     job.save()
     assert client.get(f"/api/videos/{slug}").json()["status"] == "review"
+
+
+def test_unsourced_script_is_flagged_with_the_reason(env):
+    from vidgen import pipeline
+    client, jobs, _, s = env
+    slug = create(client, jobs)
+    d = s.pipeline.output_dir / slug
+    brief = pipeline.load_brief(d)
+    for a in brief.angles:
+        a.sources = []
+    brief.research_error = "en.wikipedia: handshake timed out"
+    (d / pipeline.BRIEF_FILE).write_text(brief.model_dump_json(), encoding="utf-8")
+    v = client.get(f"/api/videos/{slug}").json()
+    assert v["sources_missing"] is True and "handshake" in v["research_error"]

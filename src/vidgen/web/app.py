@@ -292,6 +292,9 @@ def create_app(settings: Callable[[], Settings] = get_settings,
             **info,
             "script": read_json_model(d / "script.json", Script),
             "brief": brief_view if brief is not None else None,
+            # a script written without any source: its facts are unchecked (research found nothing / failed)
+            "sources_missing": brief is not None and (d / "script.json").exists() and not brief.chosen_sources(),
+            "research_error": brief.research_error if brief is not None else "",
             # length indicator: estimate = words / wps in the UI, target range per format, real length once voiced
             "target_seconds": list(settings().preset(info["format"]).target_seconds),
             "wps": WORDS_PER_SECOND[info["lang"]],

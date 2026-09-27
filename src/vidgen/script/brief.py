@@ -13,7 +13,7 @@ from vidgen.script.hooks import strip_generic_opener
 from vidgen.script.templates import render
 from vidgen.script.llm import LLMChain
 from vidgen.script.research import Wikipedia, facts_block
-from vidgen.script.research import research as research_topic
+from vidgen.script.research import research_with_status
 
 log = logging.getLogger(__name__)
 MAX_TOPICS = 5
@@ -72,7 +72,7 @@ def make_brief(topic: str, lang: str, fmt: str, llm: LLMChain, wiki: Wikipedia |
     scientist" story), and per-angle lookups cost 6 article picks and disagreed on the article."""
     from vidgen.config import LANG_NAMES
 
-    sources = research_topic(topic, lang, llm, wiki) if research else []
+    sources, research_error = research_with_status(topic, lang, llm, wiki) if research else ([], "")
     drafts = llm.generate(render("brief_angles.md", topic=topic, lang_name=LANG_NAMES[lang],
                                   format_note=FORMAT_NOTES[fmt], facts=facts_block(sources)), AngleList).angles
     # keep one angle per style, in the canonical order, even if the model repeated a style
@@ -84,4 +84,5 @@ def make_brief(topic: str, lang: str, fmt: str, llm: LLMChain, wiki: Wikipedia |
         cut = strip_generic_opener(d.hook)
         if cut:
             d.hook = cut
-    return Brief(topic=topic, angles=[Angle(**d.model_dump(), sources=sources) for d in ordered])
+    return Brief(topic=topic, angles=[Angle(**d.model_dump(), sources=sources) for d in ordered],
+                 research_error=research_error)

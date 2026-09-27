@@ -50,6 +50,7 @@ class Brief(BaseModel):
     # the angle (with only its ticked sources) the CURRENT script was written from; kept when new
     # angles are generated so fact-check / extend / rewrite keep their facts until another is chosen
     script_angle: Angle | None = None
+    research_error: str = ""  # why research found no sources (network, …); "" = fine or simply none exist
 
     def chosen_angle(self) -> Angle | None:
         if self.chosen is not None:

@@ -358,6 +358,10 @@ async function renderDetail(slug, { keepDraft = false } = {}) {
         ${["brief", "script", "render"].includes(job.kind) ? `<button class="btn primary sm" id="retry">Thử lại</button>` : ""}</div>` : ""}
     ${v.status === "stale" && !active ? `<div class="banner info">Kịch bản đã sửa sau khi dựng — video hiện tại chưa khớp. Bấm <b>Render lại</b>.</div>` : ""}
     ${taskBanner}
+    ${v.sources_missing && !showBrief && !active ? `<div class="banner warn"><div><b>Kịch bản này viết không có nguồn</b> —
+        ${v.research_error ? "lần tra Wikipedia bị lỗi, dữ kiện chưa được đối chiếu." : "không tìm thấy bài Wikipedia phù hợp, dữ kiện chưa được đối chiếu."}
+        Tra nguồn lại rồi chọn góc để viết lại kịch bản.</div>
+        <button class="btn primary sm" id="retry-sources">Tìm nguồn lại</button></div>` : ""}
     ${showBrief ? `<div class="banner info">Chọn một góc khai thác. Có thể sửa tiêu đề, câu mở đầu, ý chính và bỏ tick nguồn không đúng chủ đề — kịch bản chỉ dùng dữ kiện từ nguồn được tick.</div>` : ""}
     ${needsRerender && !active ? `<div class="banner info">Đã đổi clip. Bấm <b>Render video</b> để dựng lại — chỉ ghép lại video (~20-40s), giọng đọc và các clip khác giữ nguyên.</div>`
       : v.status === "review" && !active && !showBrief ? `<div class="banner info">Kịch bản sẵn sàng. Sửa lời đọc và từ khóa hình nếu cần, rồi bấm <b>Render video</b>.</div>` : ""}
@@ -428,7 +432,9 @@ function renderBrief(v) {
       <button class="btn ghost sm" id="regen-brief" title="Tra nguồn lại và đề xuất 3 góc mới">↻ Tạo lại 3 góc</button></div>
     <div class="card panel brief-sources"><h2 class="section-title">Nguồn Wikipedia — bỏ tick nguồn sai chủ đề</h2>
       ${sources.length ? sources.map(sourceRow).join("")
-        : `<div class="sources warn">Không tìm được nguồn — kịch bản sẽ nói chung chung, hãy kiểm tra kỹ dữ kiện.</div>`}
+        : b.research_error
+          ? `<div class="sources warn">Không tra được Wikipedia (lỗi mạng hoặc dịch vụ) — bấm <b>↻ Tạo lại 3 góc</b> để thử lại trước khi viết kịch bản.<pre>${esc(b.research_error)}</pre></div>`
+          : `<div class="sources warn">Wikipedia không có bài phù hợp — kịch bản sẽ nói chung chung, hãy kiểm tra kỹ dữ kiện.</div>`}
     </div>
     <div class="angles">${b.angles.map((a, i) => `
       <div class="card angle ${b.chosen === i ? "chosen" : ""}" data-i="${i}">
@@ -691,6 +697,15 @@ function wireDetail(slug, v) {
     renderScenes(lang, false, v.job);
   });
 
+  document.getElementById("retry-sources")?.addEventListener("click", async (ev) => {
+    ev.target.disabled = true;
+    try {
+      await api(`/api/videos/${slug}/brief/regenerate`, { method: "POST" });
+      briefMode = slug; // show the new angles and sources when they arrive
+      toast("Đang tra nguồn lại…");
+      renderDetail(slug);
+    } catch (e) { toast(e.message, "error"); ev.target.disabled = false; }
+  });
   document.getElementById("retry")?.addEventListener("click", async (ev) => {
     ev.target.disabled = true;
     try { await api(`/api/videos/${slug}/resume`, { method: "POST" }); toast("Đang thử lại"); renderDetail(slug); }

@@ -79,6 +79,8 @@ def select_passages(extract: str, keywords: list[str], budget: int = CHARS_PER_S
 
 SEARCH_LIMIT = 5
 RATE_LIMIT_RETRIES = 3
+NETWORK_RETRIES = 2   # a TLS handshake timeout (seen live) is usually gone a few seconds later
+NETWORK_WAIT = 3.0
 MAX_RETRY_WAIT = 20.0  # seconds; Wikipedia usually asks for ~10
 
 
@@ -132,6 +134,17 @@ class Wikipedia:
         self.cache_dir = cache_dir
         self.sleep = sleep
 
+    def _get(self, url: str, params: dict) -> httpx.Response:
+        for n in range(NETWORK_RETRIES + 1):
+            try:
+                return self.http.get(url, params=params)
+            except httpx.TransportError as e:  # timeouts, refused/reset connections
+                if n == NETWORK_RETRIES:
+                    raise
+                log.warning("wikipedia unreachable (%s), retrying", e)
+                self.sleep(NETWORK_WAIT * (n + 1))
+        raise AssertionError("unreachable")
+
     def _api(self, lang: str, **params) -> dict:
         params = {"format": "json", **params}
         cached = None
@@ -144,7 +157,7 @@ class Wikipedia:
                 except ValueError:
                     cached.unlink(missing_ok=True)
         for attempt in range(RATE_LIMIT_RETRIES + 1):
-            resp = self.http.get(f"https://{lang}.wikipedia.org/w/api.php", params=params)
+            resp = self._get(f"https://{lang}.wikipedia.org/w/api.php", params)
             if resp.status_code != 429 or attempt == RATE_LIMIT_RETRIES:
                 break
             try:  # Retry-After may also be an HTTP date; then just wait a moment
@@ -184,7 +197,7 @@ def default_wikipedia() -> Wikipedia:
 
 def lookup_sources(topic: str, lang: str, queries_en: list[str], queries_local: list[str],
                    keywords: list[str], llm: LLMChain, wiki: Wikipedia | None = None,
-                   cache: dict | None = None) -> list[Source]:
+                   cache: dict | None = None, errors: list[str] | None = None) -> list[Source]:
     """One article from English Wikipedia (usually the most detailed) plus one from the video-language
     edition. Each language pools the hits of all its queries, then the LLM picks one.
     `cache` (keyed by lang + queries) lets several brief angles share lookups within one job."""
@@ -207,6 +220,8 @@ def lookup_sources(topic: str, lang: str, queries_en: list[str], queries_local: 
                 cache[key] = wiki.fetch(wlang, hit.title, keywords) if hit else None
             except (httpx.HTTPError, KeyError, ValueError) as e:
                 log.warning("wikipedia %s lookup %r failed: %s", wlang, queries, e)
+                if errors is not None:
+                    errors.append(f"{wlang}.wikipedia: {e}")
                 cache[key] = None
         src = cache[key]
         if src and src.url not in {s.url for s in sources}:
@@ -214,16 +229,26 @@ def lookup_sources(topic: str, lang: str, queries_en: list[str], queries_local: 
     return sources
 
 
-def research(topic: str, lang: str, llm: LLMChain, wiki: Wikipedia | None = None) -> list[Source]:
-    """Plan queries with the LLM, then look them up (used when a video has no brief)."""
+def research_with_status(topic: str, lang: str, llm: LLMChain,
+                         wiki: Wikipedia | None = None) -> tuple[list[Source], str]:
+    """Plan queries with the LLM, then look them up. Also returns why nothing was found ("" when sources
+    were found, or when Wikipedia simply had no fitting article): a network outage must not silently
+    produce an unsourced script."""
     from vidgen.config import LANG_NAMES
 
     try:
         plan = llm.generate(PLAN_PROMPT.format(topic=topic, lang_name=LANG_NAMES[lang]), ResearchPlan)
     except Exception as e:
         log.warning("research plan failed, writing without sources: %s", e)
-        return []
-    return lookup_sources(topic, lang, plan.queries_en, plan.queries_local, plan.keywords, llm, wiki)
+        return [], f"research plan: {e}"
+    errors: list[str] = []
+    sources = lookup_sources(topic, lang, plan.queries_en, plan.queries_local, plan.keywords, llm, wiki,
+                             errors=errors)
+    return sources, "" if sources else "; ".join(errors)
+
+
+def research(topic: str, lang: str, llm: LLMChain, wiki: Wikipedia | None = None) -> list[Source]:
+    return research_with_status(topic, lang, llm, wiki)[0]
 
 
 def facts_block(sources: list[Source]) -> str:

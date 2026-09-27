@@ -215,3 +215,55 @@ def test_disk_cache_avoids_repeat_requests(tmp_path):
     rs.Wikipedia(client, cache_dir=tmp_path).search("vi", "bạch tuộc")
     again = rs.Wikipedia(client, cache_dir=tmp_path).search("vi", "bạch tuộc")
     assert again[0].title == "Bạch tuộc" and len(calls) == 1
+
+
+# --- research failures are retried and reported --------------------------------------------------------
+def test_network_errors_are_retried(tmp_path):
+    from vidgen.script.research import Wikipedia
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) < 3:
+            raise httpx.ConnectTimeout("handshake timed out", request=request)
+        return httpx.Response(200, json={"query": {"search": [{"title": "Octopus", "snippet": ""}]}})
+    wiki = Wikipedia(http=httpx.Client(transport=httpx.MockTransport(handler)), cache_dir=None, sleep=lambda s: None)
+    assert [h.title for h in wiki.search("en", "octopus")] == ["Octopus"] and len(calls) == 3
+
+
+def test_research_reports_why_it_found_nothing():
+    from vidgen.script.research import research_with_status
+
+    class Plan:
+        name = "plan"
+
+        def generate_json(self, prompt, schema):
+            return json.dumps({"queries_en": ["Octopus"], "queries_local": ["Bạch tuộc"], "keywords": ["heart"]})
+
+    class Down:
+        def search(self, lang, q):
+            raise httpx.ConnectTimeout("handshake timed out")
+
+    sources, error = research_with_status("bạch tuộc", "vi", LLMChain([Plan()]), Down())
+    assert sources == [] and "handshake timed out" in error
+
+
+def test_brief_records_the_research_error():
+    from vidgen.script import brief as br
+
+    class Llm:
+        name = "l"
+
+        def generate_json(self, prompt, schema):
+            if schema.__name__ == "ResearchPlan":
+                return json.dumps({"queries_en": ["X"], "queries_local": [], "keywords": []})
+            return json.dumps({"angles": [{"style": "explain", "title": "T", "hook": "Một câu mở hay.",
+                                           "key_points": ["a", "b"]}]})
+
+    class Down:
+        def search(self, lang, q):
+            raise httpx.ConnectTimeout("handshake timed out")
+
+    brief = br.make_brief("x", "vi", "short", LLMChain([Llm()]), wiki=Down())
+    assert brief.research_error and brief.angles[0].sources == []
