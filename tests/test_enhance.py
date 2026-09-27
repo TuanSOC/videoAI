@@ -39,7 +39,9 @@ def test_nothing_usable_is_an_error():
 
 
 def test_chain_usage_names_every_model_and_flags_a_fallback():
-    chain = LLMChain([Answers("groq:a", fail=True), Answers("ollama:b", {"ideas": []}, {"ideas": []})])
+    local = Answers("ollama:b", {"ideas": []}, {"ideas": []})
+    local.tier = "base"
+    chain = LLMChain([Answers("groq:a", fail=True), local])
     chain.generate("p", enhance.TopicIdeas)
     chain.generate("p", enhance.TopicIdeas)
     assert chain.usage() == {"models": ["ollama:b"], "fallback": True}

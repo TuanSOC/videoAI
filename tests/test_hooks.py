@@ -157,3 +157,10 @@ def test_only_the_last_scene_asks_for_comments():
     out = writer._open_loop_structure(scenes, "", None, 0)
     assert [s.narration for s in out] == [s.narration for s in scenes[:3] + scenes[4:]]
     assert hooks.is_comment_cta("Let me know in the comments!") and not hooks.is_comment_cta("Vì sao nó lây lan?")
+
+
+def test_the_hook_is_never_dropped_as_a_comment_request():
+    from vidgen.models import Scene
+    scenes = [Scene(id=0, narration=n, visual_query="q") for n in
+              ("Hãy chia sẻ nếu bạn từng mất dữ liệu vì ransomware!", "Vì sao?", "Vì chưa vá.", "Bạn nghĩ sao? Hãy chia sẻ!")]
+    assert len(writer._open_loop_structure(scenes, "", None, 0)) == 4

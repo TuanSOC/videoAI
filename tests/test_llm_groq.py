@@ -11,6 +11,13 @@ from vidgen.config import LLMConfig, get_settings
 from vidgen.script import llm as L
 
 
+@pytest.fixture(autouse=True)
+def fresh_rate_limits():
+    L.RATE_LIMITED.clear()    # module-level on purpose (shared by every chain); tests start clean
+    yield
+    L.RATE_LIMITED.clear()
+
+
 class Out(BaseModel):
     hook: str
     n: int = 1
@@ -226,3 +233,38 @@ def test_strong_prompts_forbid_unpronounceable_strings():
     from vidgen.script.templates import PROMPTS
     spoken = ("short.md", "long_chapter.md", "expand.md", "rewrite_scene.md", "hook_fix.md")
     assert all("domain names" in (PROMPTS / "strong" / n).read_text(encoding="utf-8") for n in spoken)
+
+
+# --- review fixes -------------------------------------------------------------------------------------------
+def test_a_rate_limited_model_is_skipped_until_it_may_answer_again(monkeypatch):
+    sleeps = []
+    calls = fake_post(monkeypatch, reply(429, headers={"retry-after": "600"}))
+    L.LLMChain([groq(sleeps), Local()]).generate("p", Out)
+    L.LLMChain([groq(sleeps), Local()]).generate("p", Out)     # a later call: no second request to Groq
+    assert len(calls) == 1 and sleeps == []
+
+
+def test_impatient_provider_never_waits(monkeypatch):
+    sleeps = []
+    fake_post(monkeypatch, reply(429, headers={"retry-after": "3"}))
+    p = L.GroqProvider("k", "m", sleep=sleeps.append, max_wait=0)
+    assert L.LLMChain([p, Local()]).generate("p", Out).hook == "local" and sleeps == []
+
+
+def test_http_date_retry_after_is_treated_as_long(monkeypatch):
+    sleeps = []
+    fake_post(monkeypatch, reply(429, headers={"retry-after": "Wed, 21 Oct 2026 07:28:00 GMT"}))
+    assert L.LLMChain([groq(sleeps), Local()]).generate("p", Out).hook == "local" and sleeps == []
+
+
+def test_second_hosted_model_answering_is_not_a_local_fallback(monkeypatch):
+    fake_post(monkeypatch, reply(401), reply(content={"hook": "h"}))
+    chain = L.LLMChain([groq(), L.GroqProvider("k", "qwen/qwen3.8-27b")])
+    chain.generate("p", Out)
+    assert chain.usage() == {"models": ["groq:qwen/qwen3.8-27b"], "fallback": False}
+
+
+def test_english_with_typographic_marks_is_still_not_vietnamese():
+    from vidgen.script.writer import in_language
+    assert not in_language("The exploit’s kill switch — a domain — stopped it.", "vi")
+    assert in_language("Mã khai thác bị rò rỉ tháng 4.", "vi") and in_language("Anything goes here.", "en")

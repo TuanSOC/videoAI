@@ -315,7 +315,7 @@ def enhance_topics(text: str, lang: str, fmt: str, s: Settings):
     from vidgen.script.enhance import enhance_topics as enhance
     from vidgen.script.llm import default_chain
 
-    llm = default_chain(s)
+    llm = default_chain(s, patient=False)   # the user is waiting: no rate-limit sleeps, fall through instead
     return enhance(text, lang, fmt, llm), llm.usage()
 
 

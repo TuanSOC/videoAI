@@ -62,7 +62,7 @@ def hook_problem(text: str) -> str | None:
 
 # asking viewers to comment belongs to the closing scene only (seen live: a second one in scene 12 of 15)
 CTA_PHRASES = ("hãy chia sẻ", "chia sẻ ý kiến", "để lại bình luận", "bình luận bên dưới", "để lại ý tưởng",
-               "comment below", "in the comments", "let me know", "leave a comment", "share your")
+               "comment below", "in the comments", "leave a comment")
 
 
 def is_comment_cta(text: str) -> bool:

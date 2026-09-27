@@ -73,31 +73,43 @@ def strict_schema(schema: type[BaseModel]) -> dict:
     return out
 
 
+RATE_LIMITED: dict[str, float] = {}   # model → time.time() before which Groq said not to call it again
+
+
 class GroqProvider:
     """Groq's OpenAI-compatible API (free tier: ~1000 requests/day, 8000 tokens/minute per model). A short
-    wait advised by 429 is honoured; a long one (daily cap) hands over to the next provider."""
+    wait advised by 429 is honoured (up to `max_wait`); a longer one (daily cap) hands over to the next
+    provider, and the model is skipped by every chain until that time has passed."""
     tier = "strong"
     URL = "https://api.groq.com/openai/v1/chat/completions"
     RATE_WAIT_MAX = 65.0
     RATE_WAITS = 2
 
-    def __init__(self, api_key: str, model: str, sleep: Callable[[float], None] | None = None):
+    def __init__(self, api_key: str, model: str, sleep: Callable[[float], None] | None = None,
+                 max_wait: float = RATE_WAIT_MAX):
         self.name = f"groq:{model}"
         self._key = api_key
         self._model = model
         self._sleep = sleep or time.sleep
+        self._max_wait = max_wait   # 0 for a request the user is waiting on (✨ enhance)
 
     def _post(self, prompt: str, response_format: dict) -> httpx.Response:
         body = {"model": self._model, "messages": [{"role": "user", "content": prompt}],
                 "response_format": response_format, "temperature": 0.7}
         if self._model.startswith("openai/gpt-oss"):
             body["reasoning_effort"] = "low"   # reasoning tokens count against the per-minute budget
+        if time.time() < RATE_LIMITED.get(self._model, 0):
+            raise LLMError(f"Groq rate limit ({self._model}), skipped until it resets")
         for n in range(self.RATE_WAITS + 1):
             resp = httpx.post(self.URL, json=body, headers={"Authorization": f"Bearer {self._key}"}, timeout=120)
             if resp.status_code != 429:
                 return resp
-            wait = float(resp.headers.get("retry-after") or self.RATE_WAIT_MAX + 1)
-            if wait > self.RATE_WAIT_MAX or n == self.RATE_WAITS:
+            try:
+                wait = float(resp.headers.get("retry-after") or "")
+            except ValueError:   # missing, or an HTTP date: treat as a long wait
+                wait = self.RATE_WAIT_MAX + 1
+            if wait > self._max_wait or n == self.RATE_WAITS:
+                RATE_LIMITED[self._model] = time.time() + wait
                 raise LLMError(f"Groq rate limit ({self._model}), retry in {wait:.0f}s")
             log.info("groq rate limit, waiting %.0fs", wait)
             self._sleep(wait)
@@ -153,11 +165,11 @@ class LLMChain:
 
     def __init__(self, providers: list[LLMProvider], retries: int = 2):
         if not providers:
-            raise LLMError("No LLM provider configured: check llm.providers in config.yaml")
+            raise LLMError("No LLM provider configured: check llm.creative / llm.checker in config.yaml")
         self.providers = providers
         self.retries = retries
         self.last_provider = ""   # who answered the last generate() ("groq:openai/gpt-oss-120b", ...)
-        self.fallback = False     # True when that was not the first provider
+        self.fallback = False     # True when a weaker (local) tier answered for a stronger first provider
         self.used: list[str] = []  # every answer's provider, for usage()
 
     def generate(self, prompt: str | Callable[[str], str], schema: type[T]) -> T:
@@ -169,7 +181,7 @@ class LLMChain:
                 try:
                     raw = provider.generate_json(text, schema)
                     out = schema.model_validate(json.loads(raw))
-                    self.last_provider, self.fallback = provider.name, provider is not self.providers[0]
+                    self.last_provider, self.fallback = provider.name, self._downgrade(provider)
                     self.used.append(provider.name)
                     return out
                 except (json.JSONDecodeError, ValidationError) as e:
@@ -181,14 +193,19 @@ class LLMChain:
                     break
         raise LLMError("All LLM providers failed:\n" + "\n".join(errors))
 
+    def _downgrade(self, provider) -> bool:
+        tier = getattr(self.providers[0], "tier", "base")
+        return getattr(provider, "tier", "base") != tier
 
     def usage(self) -> dict:
-        """Which models answered so far, and whether any answer came from a fallback (shown in the studio)."""
+        """Which models answered so far, and whether a local fallback wrote any of it (a second hosted model
+        is not a fallback worth warning about)."""
         models = list(dict.fromkeys(self.used))
-        return {"models": models, "fallback": any(m != self.providers[0].name for m in models)}
+        by_name = {p.name: p for p in self.providers}
+        return {"models": models, "fallback": any(self._downgrade(by_name[m]) for m in models if m in by_name)}
 
 
-def default_chain(s: Settings, role: str = "creative") -> LLMChain:
+def default_chain(s: Settings, role: str = "creative", patient: bool = True) -> LLMChain:
     """The role's providers in config order (`llm.creative` / `llm.checker`); hosted ones without a key are
     skipped, so with no keys this is the local Ollama chain."""
     cfg = s.pipeline.llm
@@ -198,7 +215,8 @@ def default_chain(s: Settings, role: str = "creative") -> LLMChain:
         if name == "ollama":
             providers.append(OllamaProvider(s.secrets.ollama_url, model or cfg.ollama_model, cfg.ollama_think))
         elif name == "groq" and s.secrets.groq_api_key:
-            providers.append(GroqProvider(s.secrets.groq_api_key, model))
+            providers.append(GroqProvider(s.secrets.groq_api_key, model, max_wait=GroqProvider.RATE_WAIT_MAX
+                                          if patient else 0))
         elif name == "gemini" and s.secrets.gemini_api_key:
             providers.append(GeminiProvider(s.secrets.gemini_api_key, model or cfg.gemini_model))
     return LLMChain(providers)

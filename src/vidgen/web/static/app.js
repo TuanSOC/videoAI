@@ -149,7 +149,7 @@ async function refreshHealth() {
 
 // ---------- library ----------
 // the ideas box survives the library's periodic refresh (it re-renders the whole page)
-const ideaDraft = { text: "", ideas: null, models: [], fallback: false, busy: false };
+const ideaDraft = { text: "", ideas: null, models: [], fallback: false, busy: false, format: "short", lang: "vi" };
 
 function modelName(spec) { return spec.split(":").slice(1).join(":").replace(/^openai\//, "") || spec; }
 
@@ -182,13 +182,13 @@ async function renderLibrary() {
       <div class="row">
         <div class="field"><span>Định dạng</span>
           <div class="segmented" role="radiogroup">
-            <input type="radio" id="f-short" name="format" value="short" checked><label for="f-short">Short 9:16</label>
-            <input type="radio" id="f-long" name="format" value="long"><label for="f-long">Long 16:9</label>
+            <input type="radio" id="f-short" name="format" value="short" ${ideaDraft.format === "short" ? "checked" : ""}><label for="f-short">Short 9:16</label>
+            <input type="radio" id="f-long" name="format" value="long" ${ideaDraft.format === "long" ? "checked" : ""}><label for="f-long">Long 16:9</label>
           </div></div>
         <div class="field"><span>Ngôn ngữ</span>
           <div class="segmented" role="radiogroup">
-            <input type="radio" id="l-vi" name="lang" value="vi" checked><label for="l-vi">Tiếng Việt</label>
-            <input type="radio" id="l-en" name="lang" value="en"><label for="l-en">English</label>
+            <input type="radio" id="l-vi" name="lang" value="vi" ${ideaDraft.lang === "vi" ? "checked" : ""}><label for="l-vi">Tiếng Việt</label>
+            <input type="radio" id="l-en" name="lang" value="en" ${ideaDraft.lang === "en" ? "checked" : ""}><label for="l-en">English</label>
           </div></div>
         <label class="check grow"><input type="checkbox" name="auto_render"> Tự động hết (lấy góc 1, bỏ qua duyệt)</label>
         <button class="btn primary" type="submit">Phân tích ý tưởng</button>
@@ -216,6 +216,9 @@ async function renderLibrary() {
   const form = document.getElementById("new-form");
   const ideaInput = form.querySelector("textarea[name=text]");
   ideaInput.addEventListener("input", () => { ideaDraft.text = ideaInput.value; });
+  form.addEventListener("change", (ev) => {
+    if (ev.target.name === "format" || ev.target.name === "lang") ideaDraft[ev.target.name] = ev.target.value;
+  });
   const showSuggestions = () => {
     document.getElementById("suggestions").innerHTML = suggestionsHtml();
     document.getElementById("enhance").disabled = ideaDraft.busy;

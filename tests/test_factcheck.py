@@ -125,6 +125,9 @@ def test_notes_that_confirm_a_scene_are_not_flags():
     # seen live (qwen3:8b checker): 7 of 10 "issues" were just "Đúng."
     llm = Fake({"issues": [{"id": 1, "note": "Đúng."}, {"id": 2, "note": "Chính xác, khớp tài liệu."},
                            {"id": 1, "note": "Correct."}, {"id": 2, "note": "Sai ngày: tài liệu nói năm 2016."},
-                           {"id": 1, "note": "Chính phủ không được nhắc trong tài liệu."}]})
+                           {"id": 1, "note": "Chính phủ không được nhắc trong tài liệu."},
+                           {"id": 2, "note": "Đúng, nhưng năm là 2016."}, {"id": 1, "note": "Chính xác hơn là 2 tim."},
+                           {"id": 2, "note": "True, but the figure is wrong."}]})
     assert [i["note"] for i in fact_check(SCRIPT, [SRC], LLMChain([llm])).issues] == [
-        "Sai ngày: tài liệu nói năm 2016.", "Chính phủ không được nhắc trong tài liệu."]
+        "Sai ngày: tài liệu nói năm 2016.", "Chính phủ không được nhắc trong tài liệu.", "Đúng, nhưng năm là 2016.",
+        "Chính xác hơn là 2 tim.", "True, but the figure is wrong."]

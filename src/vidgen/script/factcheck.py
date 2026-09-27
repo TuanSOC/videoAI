@@ -4,6 +4,7 @@ Kept outside script.json on purpose: writing flags into the script would change 
 the voice to be regenerated, and keying by text means editing a flagged sentence clears its flag."""
 
 import logging
+import re
 
 from pydantic import BaseModel
 
@@ -19,10 +20,22 @@ SCENES_PER_CHECK = 25
 CONFIRMS = ("đúng", "chính xác", "hợp lệ", "khớp", "correct", "accurate", "ok", "supported", "true")
 
 
+CONTRAST = ("nhưng", "tuy nhiên", "sai", "không", "but", "however", "wrong", "not")
+
+
 def confirms(note: str) -> bool:
-    """The note agrees with the scene rather than flagging it."""
+    """The note only agrees with the scene ("Đúng.", "Chính xác, khớp tài liệu."); a confirmation followed by a
+    correction ("Đúng, nhưng năm là 2016", "Chính xác hơn là …") is still a flag."""
     low = note.strip().casefold()
-    return any(low.startswith(c) and (len(low) == len(c) or not low[len(c)].isalnum()) for c in CONFIRMS)
+    for c in CONFIRMS:
+        if not low.startswith(c):
+            continue
+        rest = low[len(c):]
+        if not rest.strip(" .!"):
+            return True
+        if rest[0] in ",.:;!-–" and not any(re.search(rf"\b{w}\b", rest) for w in CONTRAST):
+            return True
+    return False
 
 
 class Issue(BaseModel):

@@ -308,7 +308,9 @@ def _open_loop_structure(scenes: list[Scene], open_loop: str, angle: Angle | Non
     if 1 <= payoff < len(scenes) - 1:  # answered too early: the reveal belongs at the end
         answer = scenes.pop(payoff - 1)
         scenes.insert(len(scenes) - 1, answer)  # before the closing question (pop first: len changes)
-    scenes = [sc for i, sc in enumerate(scenes) if i == len(scenes) - 1 or not hooks.is_comment_cta(sc.narration)]
+    # a comment request mid-script is dropped; the hook and the closing question never are
+    scenes = [sc for i, sc in enumerate(scenes)
+              if i in (0, len(scenes) - 1) or not hooks.is_comment_cta(sc.narration)]
     if angle is not None and hooks.hook_problem(angle.hook) is None:
         stock = {"narration": angle.hook, "visual_type": "stock", "ai_prompt": ""}
         if _similar(scenes[0].narration, angle.hook):
@@ -437,9 +439,13 @@ def default_ai_prompt(query: str) -> str:
 TYPOGRAPHY = str.maketrans({"\u2010": "-", "\u2011": "-", "\u2012": "-", "\u00a0": " ", "\u202f": " "})
 
 
+VI_LETTERS = re.compile("[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]", re.I)
+
+
 def in_language(text: str, lang: str) -> bool:
-    """Vietnamese narration always carries diacritics; an all-ASCII sentence is another language."""
-    return lang != "vi" or not text.isascii() or len(text.split()) < 4
+    """Vietnamese narration always carries diacritics (English from hosted models has ’ and — too, so
+    non-ASCII alone proves nothing)."""
+    return lang != "vi" or bool(VI_LETTERS.search(text)) or len(text.split()) < 4
 
 
 def postprocess(scenes: list[Scene], max_ai_video: int) -> list[Scene]:
