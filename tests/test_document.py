@@ -53,7 +53,8 @@ def test_card_layout_fits_and_highlight_covers_the_figure():
     w, h = 1080, 1920
     layout = doc.layout(q, (w, h))
     assert layout.boxes and all(0 <= x and x + bw <= w and 0 <= y and y + bh <= h for x, y, bw, bh in layout.boxes)
-    assert max(y + bh for _, y, _, bh in layout.words) < h - 620                # above the caption safe zone
+    caption_top = h - 620 - 110                          # margin_v + one line of 76 px captions with outline
+    assert layout.source_y + 60 < caption_top                                     # the source line too
     first = layout.words[q.start]
     assert layout.boxes[0][0] <= first[0] + 2 and layout.boxes[0][1] <= first[1] + 2
 

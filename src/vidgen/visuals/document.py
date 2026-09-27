@@ -142,7 +142,9 @@ def layout(quote: Quote, size: tuple[int, int]) -> Layout:
     portrait = h > w
     side = round(w * 0.1)
     top = round(h * (0.14 if portrait else 0.12))
-    bottom = h - round(h * (640 / 1920 if portrait else 160 / 1080))   # captions live below this
+    # captions sit above margin_v (620/1920 short, 80/1080 long) and are one ~110 px line tall: the
+    # source line under the quote was hidden behind them (seen live)
+    bottom = h - round(h * (770 / 1920 if portrait else 220 / 1080))
     words = quote.text.split()
     size_px = round(w * (0.062 if portrait else 0.034))
     while True:
