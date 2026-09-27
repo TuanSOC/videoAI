@@ -130,3 +130,21 @@ def test_document_card_keeps_its_own_exposure():
     a = Asset(scene_id=1, path="visuals/scene_001_doc.mp4", kind="video", source="document")
     [shot] = plan_shots(tl, [a], get_settings().preset("short"), "short", Path("o"), {})
     assert shot.analyse is False          # the paper is meant to be bright: no exposure "correction"
+
+
+@pytest.mark.parametrize("src, phrase", [
+    (Source(title="WannaCry", url="u", lang="en", text="Intro text here. The attack began on 12 May 2017 and spread worldwide."),
+     ["12", "May", "2017"]),
+    (Source(title="WannaCry", url="u", lang="en", text="Intro text here. On May 12, 2017, the attack began in Europe."),
+     ["May", "12,", "2017,"]),
+    (Source(title="WannaCry", url="u", lang="vi", text="Mở đầu. Cuộc tấn công bắt đầu ngày 12 tháng 5 năm 2017 tại châu Âu."),
+     ["12", "tháng", "5", "năm", "2017"]),
+])
+def test_a_date_in_the_narration_finds_the_same_date_written_out(src, phrase):
+    q = doc.find_quote("Ngày 12/5/2017, WannaCry bắt đầu lây lan.", [src], "vi")
+    assert q is not None and q.text.split()[q.start:q.end] == phrase
+
+
+def test_a_different_date_is_not_a_match():
+    src = Source(title="W", url="u", lang="en", text="Intro text here. A patch was released on 14 March 2017 by Microsoft.")
+    assert doc.find_quote("Ngày 12/5/2017, WannaCry bắt đầu lây lan.", [src], "vi") is None

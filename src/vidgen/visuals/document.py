@@ -38,6 +38,16 @@ PAPER, INK, MUTED = (243, 238, 227), (30, 30, 30), (125, 112, 95)
 MARK = (255, 212, 0, 150)         # highlighter yellow, ~60 % opaque
 LABEL = {"vi": ("TRÍCH TỪ NGUỒN", "Nguồn"), "en": ("FROM THE SOURCE", "Source")}
 _SENTENCE = re.compile(r"(?<=[.!?…])\s+")
+MONTHS = {m: i for i, m in enumerate(("january", "february", "march", "april", "may", "june", "july", "august",
+                                      "september", "october", "november", "december"), 1)}
+_MONTH = "|".join(MONTHS)
+# narration writes dates as digits ("12/5/2017"); sources write them out: each pattern → (day, month, year)
+_DATES = [
+    (re.compile(r"\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})\b"), lambda m: (m[1], m[2], m[3])),
+    (re.compile(r"\b(\d{1,2}) tháng (\d{1,2}),? năm (\d{4})\b", re.I), lambda m: (m[1], m[2], m[3])),
+    (re.compile(rf"\b(\d{{1,2}}) ({_MONTH}),? (\d{{4}})\b", re.I), lambda m: (m[1], MONTHS[m[2].lower()], m[3])),
+    (re.compile(rf"\b({_MONTH}) (\d{{1,2}}),? (\d{{4}})\b", re.I), lambda m: (m[2], MONTHS[m[1].lower()], m[3])),
+]
 
 
 @dataclass(frozen=True)
@@ -57,6 +67,28 @@ def _digits(token: str) -> str:
 def _figures(narration: str) -> set[str]:
     """Figures worth showing: 2+ digits or a percentage ("3" alone matches far too many sentences)."""
     return {d for t in narration.split() if (d := _digits(t)) and (len(d) >= 2 or "%" in t)}
+
+
+def _dates(text: str) -> list[tuple[tuple[int, int, int], int, int]]:
+    """Every date in the text as ((day, month, year), start char, end char)."""
+    out = []
+    for pattern, parts in _DATES:
+        for m in pattern.finditer(text):
+            d, mo, y = (int(x) for x in parts(m))
+            if 1 <= d <= 31 and 1 <= mo <= 12:
+                out.append(((d, mo, y), m.start(), m.end()))
+    return out
+
+
+def _span_words(words: list[str], start: int, end: int) -> tuple[int, int]:
+    """Word indices covering characters [start, end) of " ".join(words)."""
+    pos, first, last = 0, None, 0
+    for i, w in enumerate(words):
+        if pos < end and pos + len(w) > start:
+            first = i if first is None else first
+            last = i + 1
+        pos += len(w) + 1
+    return first or 0, last
 
 
 def _compounds(sentence: str) -> set[tuple[str, str]]:
@@ -80,13 +112,19 @@ def find_quote(narration: str, sources: list[SourceDoc], lang: str) -> Quote | N
     """The shortest source sentence containing one of the narration's figures (same-language sources
     first; "150.000" and "150,000" are the same figure), or None."""
     figures = _figures(narration)
-    if not figures:
+    dates = {key for key, _, _ in _dates(narration)}
+    if not figures and not dates:
         return None
     for src in sorted(sources, key=lambda s: s.lang != lang):
         best: Quote | None = None
         for sentence in _SENTENCE.split(src.text):
             words = sentence.split()
             if not 4 <= len(words) <= MAX_QUOTE_WORDS:
+                continue
+            same_day = next(((a, b) for key, a, b in _dates(" ".join(words)) if key in dates), None)
+            if same_day is not None:   # the whole date is the highlighted phrase
+                if best is None or len(words) < len(best.text.split()):
+                    best = Quote(" ".join(words), *_span_words(words, *same_day), src.title, src.url, src.lang)
                 continue
             for i, w in enumerate(words):
                 if _digits(w) in figures:
