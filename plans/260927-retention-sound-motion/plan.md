@@ -3,7 +3,7 @@ title: 'Studio-grade retention: SFX, open loop, document highlighter'
 description: >-
   Automatic sound design (synth whoosh/impact/pop), open-loop short scripts with
   a 3 s hook, document-highlight motion scenes
-status: in-progress
+status: completed
 priority: P2
 branch: main
 tags:
@@ -35,7 +35,7 @@ implement → full suite green (210 baseline). Tests never call Ollama/Pexels/Wi
 |-------|------|--------|
 | 1 | [SFX Engine](./phase-01-sfx-engine.md) | Completed |
 | 2 | [Open Loop Prompts](./phase-02-open-loop-prompts.md) | Completed |
-| 3 | [Document Highlighter](./phase-03-document-highlighter.md) | In Progress |
+| 3 | [Document Highlighter](./phase-03-document-highlighter.md) | Completed |
 
 ## Out of scope
 UI controls for SFX, AI music/SFX generation, downloading SFX packs, real-publication imitation.

@@ -64,6 +64,7 @@ class Shot:
     transition_in: bool = False  # first shot of a scene that the previous scene cross-fades into
     punch: float = 0.0           # extra zoom (PUNCH_IN when the scene already showed this source)
     focus: Focus = field(default_factory=Focus)
+    analyse: bool = True         # False: keep the source's own framing/exposure (document cards)
 
 
 def fade_frames(p: FormatPreset) -> int:
@@ -104,7 +105,7 @@ def plan_shots(timeline: Timeline, assets: list[Asset], p: FormatPreset, fmt: st
             shots.append(Shot(scene.scene_id, k, kind, src, round(offset, 3), size,
                               MOTIONS[(si + k) % len(MOTIONS)] if kind == "image" else "none",
                               transition_in=(k == 0 and si > 0),
-                              punch=PUNCH_IN if j > 0 and kind != "color" else 0.0))
+                              punch=PUNCH_IN if j > 0 and kind != "color" else 0.0, analyse=not card))
     # a cross-fade needs room on both sides; otherwise it's a straight cut
     for prev, cur in zip(shots, shots[1:]):
         if cur.transition_in and (prev.frames < 2 * tf or cur.frames < 2 * tf
@@ -182,7 +183,7 @@ def _analyse_all(shots: list[Shot], p: FormatPreset) -> None:
     aspect = p.width / p.height
 
     def one(shot: Shot) -> None:
-        if shot.kind != "color" and shot.src is not None:
+        if shot.kind != "color" and shot.src is not None and shot.analyse:
             shot.focus = analyse(shot.src, shot.kind, shot.offset, shot.frames / p.fps, aspect)
 
     with ThreadPoolExecutor(4) as pool:

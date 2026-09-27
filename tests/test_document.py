@@ -121,3 +121,11 @@ def test_documents_can_be_switched_off():
 def test_highlight_never_ends_inside_a_compound_word():
     q = doc.find_quote("Tin tặc đã xâm nhập 150.000 camera an ninh.", [SRC_VI], "vi")
     assert q.text.split()[q.start:q.end] == ["150.000", "camera", "an", "ninh"]
+
+
+def test_document_card_keeps_its_own_exposure():
+    from vidgen.assemble.clips import plan_shots
+    tl = Timeline(scenes=[SceneAudio(scene_id=1, path="", start=0, duration=4.0, words=[])])
+    a = Asset(scene_id=1, path="visuals/scene_001_doc.mp4", kind="video", source="document")
+    [shot] = plan_shots(tl, [a], get_settings().preset("short"), "short", Path("o"), {})
+    assert shot.analyse is False          # the paper is meant to be bright: no exposure "correction"
