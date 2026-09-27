@@ -567,7 +567,7 @@ def vision_session(selector: Selector, s: Settings):
     @contextmanager
     def session():
         global _vision_users, _vision_loaded
-        if selector.vision is None:
+        if getattr(selector, "vision", None) is None:
             yield
             return
         with _VISION_LOCK:
@@ -620,15 +620,36 @@ def llm_judge(s: Settings) -> Judge | None:
     return judge
 
 
+def document_assets(script: Script, seconds: dict[int, float], preset: FormatPreset, out_dir: Path,
+                    sources: list) -> dict[int, Asset]:
+    """Scenes shown as a highlighted source sentence (visuals/document.py) instead of stock."""
+    from vidgen.visuals import document
+
+    out: dict[int, Asset] = {}
+    for scene_id, quote in document.plan_documents(script, sources, document.LIMIT[script.format]).items():
+        rel = f"visuals/scene_{scene_id:03d}_doc.mp4"
+        try:  # +1 s: the renderer's cut never runs out of card
+            document.make_clip(quote, (preset.width, preset.height), seconds.get(scene_id, 5.0) + 1.0, out_dir / rel)
+        except Exception as e:  # a card that can't be drawn just means a stock clip for that scene
+            log.warning("scene %d: document card failed: %s", scene_id, e)
+            continue
+        out[scene_id] = Asset(scene_id=scene_id, path=rel, kind="video", source="document", url=quote.url,
+                              author=quote.source_title, license="quoted source")
+    return out
+
+
 def source_visuals(script: Script, timeline: Timeline, preset: FormatPreset, out_dir: Path,
-                   s: Settings, selector: Selector | None = None) -> list[Asset]:
+                   s: Settings, selector: Selector | None = None, sources: list | None = None) -> list[Asset]:
     selector = selector or build_selector(script, preset, out_dir, s)
     seconds = {sa.scene_id: sa.duration for sa in timeline.scenes}
+    docs = document_assets(script, seconds, preset, out_dir, sources) \
+        if sources and s.pipeline.documents.enabled else {}
     try:
         # choose sequentially (cheap, cached searches; keeps clips unique), download in parallel
         with vision_session(selector, s), ThreadPoolExecutor(DOWNLOAD_WORKERS) as pool:
             selector.pool = pool
-            assets = [selector.pick(scene, seconds.get(scene.id, 5.0)) for scene in script.scenes]
+            assets = [docs.get(scene.id) or selector.pick(scene, seconds.get(scene.id, 5.0))
+                      for scene in script.scenes]
             return selector.finish(assets)
     finally:
         selector.pool = None

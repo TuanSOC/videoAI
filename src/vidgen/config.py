@@ -50,6 +50,11 @@ class SfxConfig(BaseModel):
     density: Literal["minimal", "subtle", "dense"] = "subtle"
 
 
+class DocumentsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = True  # figure scenes shown as the highlighted source sentence (visuals/document.py)
+
+
 class WhisperConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")  # a typo in config.yaml is an error, not ignored
     model: str = "small"
@@ -76,6 +81,7 @@ class PipelineConfig(BaseModel):
     llm: LLMConfig = LLMConfig()
     vision: VisionConfig = VisionConfig()
     sfx: SfxConfig = SfxConfig()
+    documents: DocumentsConfig = DocumentsConfig()
     research: bool = True  # ground scripts in Wikipedia passages (script/research.py)
     ai: AIConfig = AIConfig()
     whisper: WhisperConfig = WhisperConfig()

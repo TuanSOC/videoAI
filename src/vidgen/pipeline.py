@@ -84,8 +84,9 @@ def _visuals(job: Job) -> None:
     from vidgen.visuals.selector import source_visuals
 
     script = job.read_script()
+    sources, _ = _sources_and_angle(job.out_dir)
     assets = source_visuals(script, job.read_timeline(), job.settings.preset(script.format),
-                            job.out_dir, job.settings)
+                            job.out_dir, job.settings, sources=sources)
     write_atomic(job.out_dir / "assets.json", ASSETS.dump_json(assets, indent=2))
 
 

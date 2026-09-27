@@ -38,6 +38,10 @@ sfx:
   enabled: true
   density: subtle   # minimal | subtle | dense
 
+# scenes quoting a figure become a card with the real source sentence and a highlighter sweep
+documents:
+  enabled: true
+
 # fetch Wikipedia passages about the topic and restrict the script's facts to them
 research: true
 

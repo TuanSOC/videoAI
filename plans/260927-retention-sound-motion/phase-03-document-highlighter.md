@@ -1,9 +1,9 @@
 ---
 phase: 3
-title: "Document Highlighter"
-status: pending
+title: Document Highlighter
+status: in-progress
 priority: P3
-effort: "5h"
+effort: 5h
 dependencies: []
 ---
 

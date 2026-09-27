@@ -82,7 +82,9 @@ def plan_shots(timeline: Timeline, assets: list[Asset], p: FormatPreset, fmt: st
                                                             for x in asset.extra]
                    if asset and asset.path else [("color", None)])
         seconds = frames / p.fps
-        n = 1 if sources[0][0] == "color" else max(1, min(math.ceil(seconds / SHOT_MAX[fmt]),
+        # a document card plays once from its start (its highlighter sweeps in at the beginning)
+        card = asset is not None and asset.source == "document"
+        n = 1 if sources[0][0] == "color" or card else max(1, min(math.ceil(seconds / SHOT_MAX[fmt]),
                                                           int(seconds // MIN_SHOT) or 1))
         sizes = [frames // n + (1 if k < frames % n else 0) for k in range(n)]
         uses: dict[int, int] = {}
@@ -92,7 +94,7 @@ def plan_shots(timeline: Timeline, assets: list[Asset], p: FormatPreset, fmt: st
             uses[k % len(sources)] = j + 1
             m = sum(1 for kk in range(n) if kk % len(sources) == k % len(sources))
             offset = 0.0
-            if kind == "video" and src is not None:
+            if kind == "video" and src is not None and not card:
                 total = clip_seconds.get(src, 0.0)
                 need = size / p.fps + TRANSITION
                 lead = LEAD_IN if total > need + LEAD_IN + 0.3 else 0.0
