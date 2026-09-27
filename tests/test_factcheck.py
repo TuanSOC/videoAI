@@ -119,3 +119,12 @@ def test_factcheck_view_drops_flags_on_edited_sentences_and_follows_renumbering(
     fc = current_factcheck(tmp_path, script)
     assert fc["checked"] and fc["issues"] == [{"scene_id": 2, "narration": "Câu còn nguyên.", "note": "y"}]
     assert current_factcheck(tmp_path / "none", script) is None
+
+
+def test_notes_that_confirm_a_scene_are_not_flags():
+    # seen live (qwen3:8b checker): 7 of 10 "issues" were just "Đúng."
+    llm = Fake({"issues": [{"id": 1, "note": "Đúng."}, {"id": 2, "note": "Chính xác, khớp tài liệu."},
+                           {"id": 1, "note": "Correct."}, {"id": 2, "note": "Sai ngày: tài liệu nói năm 2016."},
+                           {"id": 1, "note": "Chính phủ không được nhắc trong tài liệu."}]})
+    assert [i["note"] for i in fact_check(SCRIPT, [SRC], LLMChain([llm])).issues] == [
+        "Sai ngày: tài liệu nói năm 2016.", "Chính phủ không được nhắc trong tài liệu."]

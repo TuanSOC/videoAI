@@ -15,6 +15,14 @@ from vidgen.script.research import Source, facts_block
 log = logging.getLogger(__name__)
 FILE = "factcheck.json"
 SCENES_PER_CHECK = 25
+# an 8B checker also "reports" scenes it found fine (seen live: 7 of 10 notes were just "Đúng.")
+CONFIRMS = ("đúng", "chính xác", "hợp lệ", "khớp", "correct", "accurate", "ok", "supported", "true")
+
+
+def confirms(note: str) -> bool:
+    """The note agrees with the scene rather than flagging it."""
+    low = note.strip().casefold()
+    return any(low.startswith(c) and (len(low) == len(c) or not low[len(c)].isalnum()) for c in CONFIRMS)
 
 
 class Issue(BaseModel):
@@ -57,4 +65,5 @@ def fact_check(script: Script, sources: list[Source], llm: LLMChain) -> FactChec
     return FactCheck(checked=True, issues=[
         {"scene_id": i.id, "narration": by_id[i.id].narration, "note": i.note.strip()}
         for i in found
-        if i.id in by_id and i.note.strip() and not by_id[i.id].narration.rstrip().endswith("?")])
+        if i.id in by_id and i.note.strip() and not confirms(i.note)
+        and not by_id[i.id].narration.rstrip().endswith("?")])
