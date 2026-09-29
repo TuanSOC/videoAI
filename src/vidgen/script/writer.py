@@ -49,6 +49,12 @@ class ShortDraft(BaseModel):
 
 class ClosingQuestion(BaseModel):
     question: str
+    visual_query: str = ""   # its own shot: a copy of the previous scene's query repeats the same clip
+
+
+# Vietnamese counts syllables: a normal question runs longer than the hook limit (16 for "Nếu là bạn, …?")
+CLOSING_MAX_WORDS = {"vi": 20, "en": 14}
+CLOSING_VISUAL = "curious person looking at camera"
 
 
 class HookFix(BaseModel):
@@ -340,14 +346,20 @@ def ensure_closing_question(scenes: list[Scene], topic: str, lang: str, llm: LLM
         return scenes
     story = "\n".join(s.narration for s in scenes)
     try:
-        q = llm.generate(templates.prompt("closing_question.md", topic=topic, lang_name=LANG_NAMES[lang],
-                                          story=story, max_words=hooks.HOOK_MAX_WORDS), ClosingQuestion).question.strip()
+        out = llm.generate(templates.prompt("closing_question.md", topic=topic, lang_name=LANG_NAMES[lang],
+                                            story=story, max_words=CLOSING_MAX_WORDS[lang]), ClosingQuestion)
     except Exception as e:
         log.warning("closing question failed: %s", e)
         return scenes
-    if not ends_with(q, ("?",)) or len(q.split()) > hooks.HOOK_MAX_WORDS or not in_language(q, lang):
+    q = plain(out.question.strip())
+    if not ends_with(q, ("?",)) or len(q.split()) > CLOSING_MAX_WORDS[lang] or not in_language(q, lang):
+        log.info("closing question unusable, script ends as written: %r", q)
         return scenes
-    return [*scenes, scenes[-1].model_copy(update={"narration": q, "visual_type": "stock", "ai_prompt": ""})]
+    query = out.visual_query.strip()
+    if not query or not query.isascii():  # stock search is English-only
+        query = CLOSING_VISUAL
+    return [*scenes, scenes[-1].model_copy(update={"narration": q, "visual_query": query, "alt_queries": [],
+                                                   "visual_type": "stock", "ai_prompt": ""})]
 
 
 def fix_hook(hook: str, topic: str, lang: str, ctx: dict, llm: LLMChain) -> str:

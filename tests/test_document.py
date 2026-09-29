@@ -170,3 +170,14 @@ def test_the_highlight_does_not_end_on_a_little_word():
     src = Source(title="Voyager", url="u", lang="en", text="Intro text here. It holds spoken greetings in 55 ancient and modern languages.")
     q = doc.find_quote("Greetings in 55 languages.", [src], "en")
     assert q.text.split()[q.start:q.end] == ["55", "ancient"]
+
+
+@pytest.mark.parametrize("text, first", [
+    ("Intro text here. It was built in the U.S. The factory opened in 1977 near the coast.",
+     "The factory opened in 1977 near the coast."),
+    ("Intro text here. It ended World War I. In 1977 a new record was launched into space.",
+     "In 1977 a new record was launched into space."),
+])
+def test_a_sentence_ending_in_initials_still_ends(text, first):
+    q = doc.find_quote("Năm 1977 có điều mới.", [Source(title="S", url="u", lang="en", text=text)], "vi")
+    assert q.text == first

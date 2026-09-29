@@ -38,12 +38,17 @@ PAPER, INK, MUTED = (243, 238, 227), (30, 30, 30), (125, 112, 95)
 MARK = (255, 212, 0, 150)         # highlighter yellow, ~60 % opaque
 LABEL = {"vi": ("TRÍCH TỪ NGUỒN", "Nguồn"), "en": ("FROM THE SOURCE", "Source")}
 _SENTENCE = re.compile(r"(?<=[.!?…])\s+")
-CLOSED = (".", "!", "?", "…")
-# "U.N. Secretary-General" is one sentence: a split right after an abbreviation is undone (seen live)
-ABBREVIATION = re.compile(r"(?:\b(?:[A-Z]\.){1,3}|\b(?:Dr|Mr|Mrs|Ms|St|Jr|Sr|Mt|No|vs|Inc|Ltd|Co)\.)$")
+CLOSED = (".", "!", "?", "…")   # ends_with() already looks past closing quotes and brackets
+# "U.N. Secretary-General" is one sentence: a split right after an abbreviation is undone (seen live).
+# A title ("Dr.") never ends a sentence; initials ("U.S.", "War I.") do when a usual sentence opener follows.
+TITLE = re.compile(r"\b(?:Dr|Mr|Mrs|Ms|St|Jr|Sr|Mt|No|vs|Inc|Ltd|Co)\.$")
+INITIALS = re.compile(r"\b(?:[A-Z]\.){1,3}$")
+OPENERS = {"The", "A", "An", "It", "Its", "In", "On", "At", "By", "For", "From", "This", "That", "These", "Those",
+           "He", "She", "They", "We", "His", "Her", "Their", "There", "After", "Before", "But", "And", "However",
+           "When", "While", "As", "Since", "During", "Although", "Many", "Some", "Most"}
 # a highlight never ends on a little word ("55 ancient and")
 LITTLE = {"and", "or", "of", "the", "a", "an", "to", "in", "on", "at", "with", "by", "for",
-          "và", "hoặc", "của", "là", "các", "những", "với", "trong", "cho", "tại"}   # ends_with() already looks past closing quotes and brackets
+          "và", "hoặc", "của", "là", "các", "những", "với", "trong", "cho", "tại"}
 MONTHS = {m: i for i, m in enumerate(("january", "february", "march", "april", "may", "june", "july", "august",
                                       "september", "october", "november", "december"), 1)}
 _MONTH = "|".join(MONTHS)
@@ -117,7 +122,9 @@ def _compounds(sentence: str) -> set[tuple[str, str]]:
 def _sentences(text: str) -> list[str]:
     out: list[str] = []
     for part in _SENTENCE.split(text):
-        if out and ABBREVIATION.search(out[-1]):
+        first = part.split(maxsplit=1)[0] if part.strip() else ""
+        if out and (TITLE.search(out[-1]) or (INITIALS.search(out[-1]) and first[:1].isupper()
+                                               and first not in OPENERS and not first[:1].isdigit())):
             out[-1] = f"{out[-1]} {part}"
         else:
             out.append(part)

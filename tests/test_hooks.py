@@ -184,3 +184,17 @@ def test_a_short_without_a_closing_question_gets_one():
     assert [s.narration for s in out][-1] == "Bạn nghĩ lỗ đen còn giấu bí mật gì?" and len(out) == 4
     assert writer.ensure_closing_question(out, "Lỗ đen", "vi", LLMChain([llm])) == out
     assert len(llm.prompts) == 1                                         # already ends with a question: no call
+
+
+def test_closing_question_is_language_sized_and_filmed_on_its_own():
+    class Q:
+        name, tier = "groq:x", "strong"
+
+        def generate_json(self, prompt, schema):
+            return json.dumps({"question": "Nếu là bạn, bạn có dám bấm nút gửi thông điệp đó ra vũ trụ không?",
+                               "visual_query": "person looking at night sky"})
+    from vidgen.models import Scene
+    scenes = [Scene(id=0, narration=n, visual_query="space probe") for n in ("Mở đầu.", "Vì sao?", "Vì trọng lực.")]
+    out = writer.ensure_closing_question(scenes, "Voyager", "vi", LLMChain([Q()]))
+    assert out[-1].narration.endswith("không?")                          # 16 syllables: fine in Vietnamese
+    assert out[-1].visual_query == "person looking at night sky" and out[-1].alt_queries == []
