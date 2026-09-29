@@ -4,10 +4,12 @@ Editing choices (why the video feels cut, not assembled):
 - pacing: a scene longer than SHOT_MAX is split into 2-3 shots, from the scene's extra clips or
   different parts of the same clip; clips skip their first LEAD_IN seconds (fades, pans in)
 - motion: stock video keeps its own camera movement (an added zoom on top looks fake); still images
-  slowly push in, pull out or pan (Ken Burns)
-- transitions: straight cuts inside a scene; the last TRANSITION seconds of a scene dissolve into the
-  next scene's first shot, at the short pause in the voice,
-  rendered inside the outgoing segment so segments stay independent (parallel, stream-copy concat)
+  slowly push in, pull out or pan (Ken Burns) on an S-curve: easing in and out reads as a camera
+  operator, a constant speed as a slideshow
+- transitions: straight cuts inside a scene (and out of a scene too brief to dissolve out of); the last
+  TRANSITION seconds of a scene cross into the next scene's first shot, at the short pause in the voice,
+  with the xfade that matches the sound there (assemble/transitions.py), rendered inside the outgoing
+  segment so segments stay independent (parallel, stream-copy concat)
 - framing & colour: focus.analyse() picks where to crop (subject, not centre) and nudges exposure
   toward a common level; one mild grade + vignette + fine grain gives the whole video a single,
   less "stock" look
@@ -16,6 +18,7 @@ Editing choices (why the video feels cut, not assembled):
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -65,6 +68,8 @@ class Shot:
     punch: float = 0.0           # extra zoom (PUNCH_IN when the scene already showed this source)
     focus: Focus = field(default_factory=Focus)
     analyse: bool = True         # False: keep the source's own framing/exposure (document cards)
+    card: bool = False           # a document card (visuals/document.py)
+    transition: str = "fade"     # the xfade into this shot when transition_in (assemble/transitions.py)
 
 
 def fade_frames(p: FormatPreset) -> int:
@@ -105,10 +110,12 @@ def plan_shots(timeline: Timeline, assets: list[Asset], p: FormatPreset, fmt: st
             shots.append(Shot(scene.scene_id, k, kind, src, round(offset, 3), size,
                               MOTIONS[(si + k) % len(MOTIONS)] if kind == "image" else "none",
                               transition_in=(k == 0 and si > 0),
-                              punch=PUNCH_IN if j > 0 and kind != "color" else 0.0, analyse=not card))
-    # a cross-fade needs room on both sides; otherwise it's a straight cut
+                              punch=PUNCH_IN if j > 0 and kind != "color" else 0.0, analyse=not card,
+                              card=card))
+    # a cross-fade needs room on both sides, and a scene this brief is left with a straight cut: dissolving
+    # out of it would blur most of what it shows
     for prev, cur in zip(shots, shots[1:]):
-        if cur.transition_in and (prev.frames < 2 * tf or cur.frames < 2 * tf
+        if cur.transition_in and (prev.frames < max(2 * tf, round(MIN_SHOT * p.fps)) or cur.frames < 2 * tf
                                   or "color" in (prev.kind, cur.kind)):
             cur.transition_in = False
     return shots
@@ -116,8 +123,9 @@ def plan_shots(timeline: Timeline, assets: list[Asset], p: FormatPreset, fmt: st
 
 def _motion(shot: Shot, p: FormatPreset, t0: int, span: int) -> str:
     """zoompan on an oversized frame; progress P runs 0→1 across the shot's whole span (including the
-    part already shown inside the previous segment's cross-fade), so motion never jumps."""
-    prog = f"min(1,(on+{t0})/{max(span, 1)})"
+    part already shown inside the previous segment's cross-fade), so motion never jumps. P is eased
+    (1-cos(πx))/2: the camera starts and settles gently instead of moving at a constant speed."""
+    prog = f"((1-cos(PI*min(1,(on+{t0})/{max(span, 1)})))/2)"
     base = 1 + shot.punch
     z = {"push": f"{base}+{MOTION}*{prog}", "pull": f"{base + MOTION}-{MOTION}*{prog}"}.get(shot.motion,
                                                                                          f"{base + MOTION}")
@@ -162,7 +170,8 @@ def shot_args(shot: Shot, nxt: Shot | None, p: FormatPreset, out: Path) -> list[
         inputs += _input(nxt, p, nxt.offset)
         nxt_span = nxt.frames + tf
         graph += (f";[1:v]{_stream(nxt, p, 0, nxt_span, tf)}[b]"
-                  f";[a][b]xfade=transition=fade:duration={tf / p.fps:.4f}:offset={(shot.frames - tf) / p.fps:.3f}[v]")
+                  f";[a][b]xfade=transition={nxt.transition}:duration={tf / p.fps:.4f}"
+                  f":offset={(shot.frames - tf) / p.fps:.3f}[v]")
     else:
         graph = graph.replace("[a]", "[v]")
     return [*inputs, "-filter_complex", graph, "-map", "[v]", "-frames:v", str(shot.frames), "-an",
@@ -190,9 +199,10 @@ def _analyse_all(shots: list[Shot], p: FormatPreset) -> None:
         list(pool.map(one, shots))
 
 
-def render_segments(assets: list[Asset], timeline: Timeline, p: FormatPreset, out_dir: Path,
-                    fmt: str = "short") -> tuple[list[Path], list[float]]:
-    """Segment files in order, and the dissolve cut times (for sound design)."""
+def render_segments(assets: list[Asset], timeline: Timeline, p: FormatPreset, out_dir: Path, fmt: str = "short",
+                    cues_for: Callable[[list[float]], list] | None = None) -> tuple[list[Path], list]:
+    """Segment files in order, and the sound cues. The cues are planned from the shot plan's scene-change
+    times BEFORE rendering (`cues_for`), because each scene change's transition follows its cue."""
     seg_dir = out_dir / "segments"
     seg_dir.mkdir(exist_ok=True)
     for old in seg_dir.glob("seg_*.mp4"):  # shot count can differ from a previous render
@@ -202,6 +212,9 @@ def render_segments(assets: list[Asset], timeline: Timeline, p: FormatPreset, ou
     with ThreadPoolExecutor(4) as pool:
         clip_seconds = dict(zip(videos, pool.map(_safe_duration, videos)))
     shots = plan_shots(timeline, assets, p, fmt, out_dir, clip_seconds)
+    cues = cues_for(cut_times(shots, p.fps)) if cues_for else []
+    from vidgen.assemble.transitions import assign_transitions   # transitions imports Shot from here
+    assign_transitions(shots, cues, p.fps)
     _analyse_all(shots, p)
 
     jobs = [(s, shots[i + 1] if i + 1 < len(shots) else None, seg_dir / f"seg_{i:04d}.mp4")
@@ -214,7 +227,7 @@ def render_segments(assets: list[Asset], timeline: Timeline, p: FormatPreset, ou
 
     with ThreadPoolExecutor(WORKERS) as pool:
         list(pool.map(render, jobs))
-    return [j[2] for j in jobs], cut_times(shots, p.fps)
+    return [j[2] for j in jobs], cues
 
 
 def _safe_duration(path: Path) -> float:
