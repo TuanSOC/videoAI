@@ -3,7 +3,7 @@ title: Kinetic Camera Motion & Smart Transitions
 description: >-
   Contextual FFmpeg xfade transitions, S-curve ease-in-out camera drift, and
   audio-visual synchronization
-status: pending
+status: completed
 priority: P1
 branch: main
 tags:
@@ -32,7 +32,7 @@ Eliminate visual monotony by introducing contextual FFmpeg `xfade` transitions (
 |---|---|---|
 | 1 | [Contextual Transition Engine](./phase-01-contextual-transitions.md) | Completed |
 | 2 | [S-Curve Eased Ken Burns & Static Drift](./phase-02-camera-motion-drift.md) | Completed |
-| 3 | [Audio-Visual Synchronized Accents](./phase-03-av-synchronized-accents.md) | Planned |
+| 3 | [Audio-Visual Synchronized Accents](./phase-03-av-synchronized-accents.md) | Completed |
 
 ## Success Criteria
 - 100% test suite passing.

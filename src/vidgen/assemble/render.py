@@ -32,6 +32,31 @@ FADE_IN, FADE_OUT = 1.5, 2   # seconds of music fade at the start and the end
 
 
 LIMIT = "alimiter=limit=0.89:attack=5:release=50:level=disabled"  # SFX transients never clip
+# an impact mid-shot (the hook, a shock word) punches the frame in, in time with the boom: the editor's
+# "punch zoom". A flash reads cheap; this reads as emphasis. On a scene change the transition does it.
+PUNCH = 0.04                          # zoom at the top of the punch...
+PUNCH_ATTACK, PUNCH_RELEASE = 0.1, 0.4  # ...reached in 0.1 s, eased back over 0.4 s
+
+
+def punch_times(cues: list, cuts: list[float]) -> list[float]:
+    """Impacts that don't land on a scene change (those get zoomin/fadeblack there, transitions.py)."""
+    from vidgen.assemble.transitions import CUE_WINDOW
+
+    return [c.time for c in cues if c.kind == "impact" and all(abs(c.time - cut) > CUE_WINDOW for cut in cuts)]
+
+
+def punch_filter(times: list[float], p: FormatPreset) -> str:
+    """zoompan over the joined video: zoom 1 + PUNCH·envelope, the envelope a quarter-sine rise and a
+    half-cosine fall per impact. Empty when there is nothing to punch."""
+    if not times:
+        return ""
+    t = f"(on/{p.fps})"
+    bumps = "+".join(
+        f"gte({t},{a:.3f})*lt({t},{a + PUNCH_ATTACK:.3f})*sin(PI/2*({t}-{a:.3f})/{PUNCH_ATTACK})"
+        f"+gte({t},{a + PUNCH_ATTACK:.3f})*lte({t},{a + PUNCH_ATTACK + PUNCH_RELEASE:.3f})"
+        f"*(1+cos(PI*({t}-{a + PUNCH_ATTACK:.3f})/{PUNCH_RELEASE}))/2" for a in times)
+    return (f"zoompan=z='1+{PUNCH}*({bumps})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":d=1:s={p.width}x{p.height}:fps={p.fps}")
 
 
 def music_gain_db(voice_mean: float | None, music_mean: float | None) -> float:
@@ -70,7 +95,7 @@ def audio_filter(has_music: bool, duration: float = 0.0, music_db: float = FALLB
 
 def final_args(duration: float, music: Path | None, music_start: float = 0.0,
                music_gain_db: float = FALLBACK_MUSIC_DB, sfx: Path | None = None,
-               out: str = "final.mp4") -> list[str]:
+               out: str = "final.mp4", video_filter: str = "") -> list[str]:
     """Paths are relative to the output dir (run with cwd there) to avoid Windows ':' escaping in filters."""
     inputs = ["-f", "concat", "-safe", "0", "-i", "segments/list.txt", "-i", "voice.wav"]
     if music:
@@ -81,7 +106,9 @@ def final_args(duration: float, music: Path | None, music_start: float = 0.0,
         inputs += ["-i", str(sfx)]
     # two independent graphs: with video and audio in one graph FFmpeg 8.1's loudnorm can emit NaN
     # samples for some voices ("Input contains NaN" from the AAC encoder, render fails)
-    return [*inputs, "-filter_complex", "[0:v]ass=subs.ass:fontsdir=fonts[v]",
+    # picture effects first, captions last: the text must not zoom with the punch
+    video = f"[0:v]{video_filter + ',' if video_filter else ''}ass=subs.ass:fontsdir=fonts[v]"
+    return [*inputs, "-filter_complex", video,
             "-filter_complex", audio_filter(music is not None, duration, music_gain_db, sfx_input),
             "-map", "[v]", "-map", "[a]",
             *ffmpeg.video_encoder(), "-c:a", "aac", "-b:a", "192k",
@@ -92,9 +119,13 @@ def render_video(script: Script, timeline: Timeline, assets: list[Asset], preset
                  out_dir: Path, seed: str, sfx_density: str | None = "subtle") -> Path:
     """sfx_density: a sfx.DENSITY preset, or None for no sound effects."""
     # sound first: each scene change's transition follows the cue planned there (assemble/transitions.py)
-    segments, cues = render_segments(
-        assets, timeline, preset, out_dir, script.format,
-        cues_for=lambda cuts: sound.detect_cues(script, timeline, cuts, sfx_density, seed) if sfx_density else [])
+    scene_cuts: list[float] = []
+
+    def plan_sound(cuts: list[float]) -> list:
+        scene_cuts[:] = cuts
+        return sound.detect_cues(script, timeline, cuts, sfx_density, seed) if sfx_density else []
+
+    segments, cues = render_segments(assets, timeline, preset, out_dir, script.format, cues_for=plan_sound)
     (out_dir / "segments" / "list.txt").write_text(
         "".join(f"file '{p.name}'\n" for p in segments), encoding="utf-8")
     (out_dir / "subs.ass").write_text(build_ass(script, timeline, preset), encoding="utf-8")
@@ -119,7 +150,8 @@ def render_video(script: Script, timeline: Timeline, assets: list[Asset], preset
     part = out_dir / PART_FILE
     try:
         ffmpeg.run(final_args(timeline.duration, music, start, gain,
-                              Path(sfx_track.name) if sfx_track else None, out=PART_FILE), cwd=out_dir)
+                              Path(sfx_track.name) if sfx_track else None, out=PART_FILE,
+                              video_filter=punch_filter(punch_times(cues, scene_cuts), preset)), cwd=out_dir)
         write_atomic(out_dir / MUSIC_FILE, json.dumps(
             {"track": music.name if music else "", "credit": track_credit(music) if music else ""},
             ensure_ascii=False))

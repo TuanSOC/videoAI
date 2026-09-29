@@ -138,3 +138,35 @@ def test_a_still_clip_drifts_on_the_same_eased_curve_and_a_moving_one_does_not()
     drift = _stream(still, P, 5, 95, 90)
     assert "cos(PI*min(1,(n+5)/95))" in drift and "crop=" in drift
     assert "n+" not in _stream(moving, P, 5, 95, 90)
+
+
+# --- phase 3: an impact mid-shot punches the frame in, then eases back ---------------------------------------
+def test_impacts_on_a_scene_change_are_left_to_the_transition():
+    from vidgen.assemble.render import punch_times
+    cues = [Cue("impact", 0.0), Cue("impact", 6.1), Cue("impact", 12.4), Cue("whoosh", 20.0)]
+    assert punch_times(cues, cuts=[6.0, 20.1]) == [0.0, 12.4]
+
+
+def test_punch_zoom_rises_fast_and_eases_back():
+    from vidgen.assemble.render import PUNCH, PUNCH_ATTACK, PUNCH_RELEASE, punch_filter
+    f = punch_filter([2.0], P)
+    assert f.startswith("zoompan=") and f"s={P.width}x{P.height}" in f and f"fps={P.fps}" in f
+    assert "2.000" in f and f"{PUNCH}" in f
+    assert punch_filter([], P) == ""
+    # the envelope the expression encodes: 0 before, 1 at the top, back to 0 after the release
+    def env(t, t0=2.0):
+        if t0 <= t < t0 + PUNCH_ATTACK:
+            return math.sin(math.pi / 2 * (t - t0) / PUNCH_ATTACK)
+        if t0 + PUNCH_ATTACK <= t <= t0 + PUNCH_ATTACK + PUNCH_RELEASE:
+            return (1 + math.cos(math.pi * (t - t0 - PUNCH_ATTACK) / PUNCH_RELEASE)) / 2
+        return 0.0
+    assert env(1.9) == 0 and abs(env(2.1) - 1) < 1e-9 and env(2.6) < 1e-9 and env(3.0) == 0
+
+
+def test_final_pass_punches_before_the_captions_are_burned():
+    from vidgen.assemble.render import final_args
+    args = final_args(30.0, None, video_filter="zoompan=z='1'")
+    graph = args[args.index("-filter_complex") + 1]
+    assert graph.index("zoompan") < graph.index("ass=subs.ass")
+    plain = final_args(30.0, None)
+    assert plain[plain.index("-filter_complex") + 1] == "[0:v]ass=subs.ass:fontsdir=fonts[v]"
