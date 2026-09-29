@@ -86,8 +86,9 @@ class GroqProvider:
     RATE_WAITS = 2
 
     def __init__(self, api_key: str, model: str, sleep: Callable[[float], None] | None = None,
-                 max_wait: float = RATE_WAIT_MAX):
+                 max_wait: float = RATE_WAIT_MAX, temperature: float = 0.7):
         self.name = f"groq:{model}"
+        self.temperature = temperature   # checkers run cooler: the same script should get the same verdict
         self._key = api_key
         self._model = model
         self._sleep = sleep or time.sleep
@@ -95,7 +96,7 @@ class GroqProvider:
 
     def _post(self, prompt: str, response_format: dict) -> httpx.Response:
         body = {"model": self._model, "messages": [{"role": "user", "content": prompt}],
-                "response_format": response_format, "temperature": 0.7}
+                "response_format": response_format, "temperature": self.temperature}
         if self._model.startswith("openai/gpt-oss"):
             body["reasoning_effort"] = "low"   # reasoning tokens count against the per-minute budget
         if time.time() < RATE_LIMITED.get(self._model, 0):
@@ -206,6 +207,9 @@ class LLMChain:
         return {"models": models, "fallback": any(self._downgrade(by_name[m]) for m in models if m in by_name)}
 
 
+CHECK_ROLES = ("checker", "second_checker")
+
+
 def default_chain(s: Settings, role: str = "creative", patient: bool = True) -> LLMChain:
     """The role's providers in config order (`llm.creative` / `llm.checker`); hosted ones without a key are
     skipped, so with no keys this is the local Ollama chain."""
@@ -216,8 +220,9 @@ def default_chain(s: Settings, role: str = "creative", patient: bool = True) -> 
         if name == "ollama":
             providers.append(OllamaProvider(s.secrets.ollama_url, model or cfg.ollama_model, cfg.ollama_think))
         elif name == "groq" and s.secrets.groq_api_key:
-            providers.append(GroqProvider(s.secrets.groq_api_key, model, max_wait=GroqProvider.RATE_WAIT_MAX
-                                          if patient else 0))
+            providers.append(GroqProvider(s.secrets.groq_api_key, model,
+                                          max_wait=GroqProvider.RATE_WAIT_MAX if patient else 0,
+                                          temperature=0.2 if role in CHECK_ROLES else 0.7))
         elif name == "gemini" and s.secrets.gemini_api_key:
             providers.append(GeminiProvider(s.secrets.gemini_api_key, model or cfg.gemini_model))
     return LLMChain(providers)

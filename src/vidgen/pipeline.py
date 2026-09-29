@@ -244,16 +244,18 @@ def _sources_and_angle(out_dir: Path):
 def check_facts(out_dir: Path, s: Settings) -> None:
     """Flag scenes the sources don't support → factcheck.json. Never fails the caller: a check that
     can't run just leaves no flags (the UI then says it wasn't checked)."""
-    from vidgen.script.factcheck import FILE, FactCheck, fact_check
+    from vidgen.script.factcheck import FILE, fact_check, merge
     from vidgen.script.llm import default_chain
 
     sources, _ = _sources_and_angle(out_dir)
-    try:
-        result = fact_check(Job(out_dir, s).read_script(), sources, default_chain(s, "checker"))
-    except Exception as e:
-        log.warning("fact check failed: %s", e)
-        result = FactCheck(checked=False)
-    write_atomic(out_dir / FILE, result.model_dump_json(indent=2))
+    script = Job(out_dir, s).read_script()
+    results = []
+    for role in ("checker", "second_checker") if s.pipeline.llm.second_checker else ("checker",):
+        try:
+            results.append(fact_check(script, sources, default_chain(s, role)))
+        except Exception as e:  # e.g. no Groq key for the second pass: the first one's flags still count
+            log.warning("fact check (%s) failed: %s", role, e)
+    write_atomic(out_dir / FILE, merge(*results).model_dump_json(indent=2))  # no result: checked=False
 
 
 def extend_script_file(out_dir: Path, s: Settings) -> int:

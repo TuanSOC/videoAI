@@ -39,12 +39,15 @@ class LLMConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")  # a typo in config.yaml is an error, not ignored
     creative: list[str] = ["ollama"]   # briefs, scripts, rewrites, hooks, metadata, topic ideas
     checker: list[str] = ["ollama"]    # fact-check
+    # a second, different model checks again and the flags are merged: one run misses what another catches
+    # (seen live: gpt-oss-120b let an invented year through; its answers also vary run to run). [] = one pass
+    second_checker: list[str] = []
     judge: list[str] = ["ollama"]      # clip tie-breaks: many small calls per video, kept local
     ollama_model: str = "qwen3:8b"
     ollama_think: bool = False
     gemini_model: str = "gemini-2.5-flash"
 
-    @field_validator("creative", "checker", "judge")
+    @field_validator("creative", "checker", "second_checker", "judge")
     @classmethod
     def _specs(cls, specs: list[str]) -> list[str]:
         for spec in specs:
@@ -56,7 +59,8 @@ class LLMConfig(BaseModel):
         return specs
 
     def uses(self, name: str) -> bool:
-        return any(spec.partition(":")[0] == name for spec in self.creative + self.checker + self.judge)
+        return any(spec.partition(":")[0] == name
+                   for spec in self.creative + self.checker + self.second_checker + self.judge)
 
 
 class VisionConfig(BaseModel):

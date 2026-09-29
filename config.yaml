@@ -26,6 +26,8 @@ llm:
   creative: ["groq:openai/gpt-oss-120b", "groq:qwen/qwen3.8-27b", ollama]
   # fact-check: qwen3:8b flagged correct physics and missed a real error; gpt-oss-120b caught it (2 s)
   checker: ["groq:openai/gpt-oss-120b", ollama]
+  # checks again with a different model, flags merged (gpt-oss missed an invented "1960" that qwen caught)
+  second_checker: ["groq:qwen/qwen3.8-27b"]
   judge: [ollama]     # clip tie-breaks: many small calls per video, kept local (saves the Groq budget)
   ollama_model: qwen3:8b
   ollama_think: false   # qwen3 "thinking" is slow and not needed for JSON scripts

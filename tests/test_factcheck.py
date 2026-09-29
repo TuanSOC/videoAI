@@ -151,3 +151,55 @@ def test_rewriting_the_hook_keeps_it_hook_sized_and_plain():
     llm = Seq()
     out = writer.rewrite_one(SCRIPT, SCRIPT.scenes[0], "", "Sau.", "make it punchier", [SRC], None, LLMChain([llm]))
     assert out.narration == "A UN chief and a six-year-old both greeted aliens." and len(llm.prompts) == 2
+
+
+# --- two independent checkers: one run misses what another catches (seen live: gpt-oss let "1960" through) -----
+def test_flags_from_two_checkers_are_merged_per_scene():
+    from vidgen.script.factcheck import FactCheck, merge
+    a = FactCheck(checked=True, issues=[{"scene_id": 2, "narration": "x", "note": "Sai năm."}])
+    b = FactCheck(checked=True, issues=[{"scene_id": 2, "narration": "x", "note": "Không có trong nguồn."},
+                                        {"scene_id": 3, "narration": "y", "note": "Sai tên."}])
+    m = merge(a, b)
+    assert m.checked and [(i["scene_id"], i["note"]) for i in m.issues] == [
+        (2, "Sai năm. / Không có trong nguồn."), (3, "Sai tên.")]
+    assert merge(FactCheck(checked=False), b).checked is True
+
+
+def test_check_facts_runs_both_checkers_and_survives_the_second_failing(tmp_path, monkeypatch):
+    brief = Brief(topic="t", angles=[Angle(style="explain", title="T", hook="H", key_points=["k"], sources=[SRC])],
+                  chosen=0)
+    (tmp_path / pipeline.BRIEF_FILE).write_text(brief.model_dump_json(), encoding="utf-8")
+    (tmp_path / "script.json").write_text(SCRIPT.model_dump_json(), encoding="utf-8")
+    first, second = Fake({"issues": [{"id": 1, "note": "Sai số."}]}), Fake({"issues": [{"id": 2, "note": "Sai năm."}]})
+    roles = []
+
+    def chain(s, role="creative"):
+        roles.append(role)
+        return LLMChain([first if role == "checker" else second])
+    monkeypatch.setattr("vidgen.script.llm.default_chain", chain)
+    settings = get_settings().model_copy(deep=True)
+    settings.pipeline.llm.second_checker = ["groq:qwen/qwen3.8-27b"]
+    pipeline.check_facts(tmp_path, settings)
+    saved = json.loads((tmp_path / "factcheck.json").read_text(encoding="utf-8"))
+    assert roles == ["checker", "second_checker"] and [i["scene_id"] for i in saved["issues"]] == [1, 2]
+
+    def broken(s, role="creative"):
+        if role == "second_checker":
+            raise RuntimeError("no key")
+        return LLMChain([first])
+    monkeypatch.setattr("vidgen.script.llm.default_chain", broken)
+    first.reply = {"issues": [{"id": 1, "note": "Sai số."}]}
+    pipeline.check_facts(tmp_path, settings)
+    assert [i["scene_id"] for i in json.loads((tmp_path / "factcheck.json").read_text(encoding="utf-8"))["issues"]] == [1]
+
+
+def test_checkers_run_cooler_than_the_writer():
+    from vidgen.config import LLMConfig
+    from vidgen.script.llm import default_chain
+    s = get_settings().model_copy(deep=True)
+    s.pipeline.llm = LLMConfig(creative=["groq:openai/gpt-oss-120b"], checker=["groq:openai/gpt-oss-120b"],
+                               second_checker=["groq:qwen/qwen3.8-27b"])
+    s.secrets.groq_api_key = "k"
+    assert default_chain(s).providers[0].temperature == 0.7
+    assert default_chain(s, "checker").providers[0].temperature == 0.2
+    assert default_chain(s, "second_checker").providers[0].temperature == 0.2

@@ -53,6 +53,19 @@ class FactCheck(BaseModel):
     issues: list[dict] = []  # {"scene_id", "narration", "note"}
 
 
+def merge(*results: FactCheck) -> FactCheck:
+    """Flags from several checkers, one per scene (notes joined), in scene order."""
+    by_scene: dict[int, dict] = {}
+    for r in results:
+        for issue in r.issues:
+            if issue["scene_id"] in by_scene:
+                kept = by_scene[issue["scene_id"]]
+                kept["note"] = f"{kept['note']} / {issue['note']}"
+            else:
+                by_scene[issue["scene_id"]] = dict(issue)
+    return FactCheck(checked=any(r.checked for r in results), issues=[by_scene[k] for k in sorted(by_scene)])
+
+
 def fact_check(script: Script, sources: list[Source], llm: LLMChain) -> FactCheck:
     from vidgen.config import LANG_NAMES
 
