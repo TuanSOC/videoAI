@@ -43,6 +43,9 @@ PUNCH_IN = 0.22        # a clip reused within a scene is framed tighter, so the 
 DRIFT = 0.04           # a tripod clip's camera travels this share of the frame over a shot...
 DRIFT_SCALE = 1.06     # ...on a frame this much larger, so the drift never reveals an edge
 GRADE = "eq=brightness={b:.3f}:contrast=1.04:saturation=1.08,vignette=angle=0.45,noise=alls=3:allf=t"
+# every segment leaves in one delivery format: xfade negotiates yuv444p and full-range stock clips arrive as
+# yuvj (seen live: 4 formats in one video, stream-copied into a yuv444p final.mp4 phones can't play)
+DELIVERY = "scale=out_range=tv,format=yuv420p"
 
 
 def frame_counts(timeline: Timeline, fps: int) -> list[int]:
@@ -185,9 +188,9 @@ def shot_args(shot: Shot, nxt: Shot | None, p: FormatPreset, out: Path) -> list[
         nxt_span = nxt.frames + tf
         graph += (f";[1:v]{_stream(nxt, p, 0, nxt_span, tf)}[b]"
                   f";[a][b]xfade=transition={nxt.transition}:duration={tf / p.fps:.4f}"
-                  f":offset={(shot.frames - tf) / p.fps:.3f}[v]")
+                  f":offset={(shot.frames - tf) / p.fps:.3f},{DELIVERY}[v]")
     else:
-        graph = graph.replace("[a]", "[v]")
+        graph = graph.replace("[a]", f",{DELIVERY}[v]")
     return [*inputs, "-filter_complex", graph, "-map", "[v]", "-frames:v", str(shot.frames), "-an",
             "-r", str(p.fps), *ffmpeg.video_encoder(), str(out)]
 

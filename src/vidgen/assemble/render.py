@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 
 from vidgen import ffmpeg
-from vidgen.assemble.clips import render_segments
+from vidgen.assemble.clips import DELIVERY, render_segments
 from vidgen.assemble import sfx as sound
 from vidgen.assemble.music import music_start, pick_music, track_credit
 from vidgen.assemble.subtitles import build_ass
@@ -107,7 +107,7 @@ def final_args(duration: float, music: Path | None, music_start: float = 0.0,
     # two independent graphs: with video and audio in one graph FFmpeg 8.1's loudnorm can emit NaN
     # samples for some voices ("Input contains NaN" from the AAC encoder, render fails)
     # picture effects first, captions last: the text must not zoom with the punch
-    video = f"[0:v]{video_filter + ',' if video_filter else ''}ass=subs.ass:fontsdir=fonts[v]"
+    video = f"[0:v]{video_filter + ',' if video_filter else ''}ass=subs.ass:fontsdir=fonts,{DELIVERY}[v]"
     return [*inputs, "-filter_complex", video,
             "-filter_complex", audio_filter(music is not None, duration, music_gain_db, sfx_input),
             "-map", "[v]", "-map", "[a]",

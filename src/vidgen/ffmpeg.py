@@ -27,14 +27,20 @@ def run(args: list[str], cwd: Path | None = None, timeout: float | None = None) 
         raise FFmpegError(f"ffmpeg failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stderr[-2000:]}")
 
 
+# what every phone and platform plays: 4:2:0, limited ("tv") range, BT.709, tagged as such (x264 writes the
+# range flag only with the whole colour description)
+DELIVERY_ARGS = ("-pix_fmt", "yuv420p", "-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709",
+                 "-color_trc", "bt709")
+
+
 @lru_cache
 def video_encoder() -> tuple[str, ...]:
     """NVENC if it actually encodes on this machine (listing alone is not proof), else libx264."""
     try:
         run(["-f", "lavfi", "-i", "color=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-"])
-        return ("-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23", "-b:v", "0")
+        return ("-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23", "-b:v", "0", *DELIVERY_ARGS)
     except FFmpegError:
-        return ("-c:v", "libx264", "-preset", "veryfast", "-crf", "20")
+        return ("-c:v", "libx264", "-preset", "veryfast", "-crf", "20", *DELIVERY_ARGS)
 
 
 def volume_stats(path: Path) -> tuple[float | None, float | None]:

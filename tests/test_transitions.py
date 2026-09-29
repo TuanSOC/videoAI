@@ -169,4 +169,24 @@ def test_final_pass_punches_before_the_captions_are_burned():
     graph = args[args.index("-filter_complex") + 1]
     assert graph.index("zoompan") < graph.index("ass=subs.ass")
     plain = final_args(30.0, None)
-    assert plain[plain.index("-filter_complex") + 1] == "[0:v]ass=subs.ass:fontsdir=fonts[v]"
+    assert plain[plain.index("-filter_complex") + 1] ==         "[0:v]ass=subs.ass:fontsdir=fonts,scale=out_range=tv,format=yuv420p[v]"
+
+
+# --- every segment leaves in the one delivery format (seen live: xfade gave yuv444p, full-range sources yuvj) --
+@pytest.mark.skipif(__import__("shutil").which("ffmpeg") is None, reason="needs ffmpeg")
+def test_segments_are_always_yuv420p_tv_range(tmp_path):
+    import subprocess
+
+    from vidgen import ffmpeg
+    small = get_settings().preset("short").model_copy(update={"width": 180, "height": 320})
+    src = tmp_path / "full.mp4"   # a full-range source, like some stock clips
+    ffmpeg.run(["-f", "lavfi", "-i", "testsrc2=s=320x240:r=30:d=3", "-pix_fmt", "yuvj420p", "-c:v", "libx264", str(src)])
+    a = Shot(1, 0, "video", src, 0.0, 45, "none")
+    b = Shot(2, 0, "video", src, 0.5, 45, "none", transition_in=True, transition="wipetl")
+    for nxt in (b, None):
+        out = tmp_path / f"seg_{nxt is None}.mp4"
+        ffmpeg.run(shot_args(a, nxt, small, out))
+        probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                                "stream=pix_fmt,color_range", "-of", "csv=p=0", str(out)],
+                               capture_output=True, text=True).stdout.strip()
+        assert probe == "yuv420p,tv", (nxt, probe)
