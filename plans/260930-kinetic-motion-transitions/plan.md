@@ -31,7 +31,7 @@ Eliminate visual monotony by introducing contextual FFmpeg `xfade` transitions (
 | Phase | Name | Status |
 |---|---|---|
 | 1 | [Contextual Transition Engine](./phase-01-contextual-transitions.md) | Completed |
-| 2 | [S-Curve Eased Ken Burns & Static Drift](./phase-02-camera-motion-drift.md) | Planned |
+| 2 | [S-Curve Eased Ken Burns & Static Drift](./phase-02-camera-motion-drift.md) | Completed |
 | 3 | [Audio-Visual Synchronized Accents](./phase-03-av-synchronized-accents.md) | Planned |
 
 ## Success Criteria

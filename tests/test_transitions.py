@@ -113,3 +113,28 @@ def test_moves_vary_even_with_soft_fades_between_them():
     cues = [Cue("whoosh", cuts[0], 1), Cue("whoosh", cuts[2], 1)]     # same variant: same first choice
     chosen = tr.assign_transitions(shots, cues, fps)
     assert chosen[1] == "fade" and chosen[0] in tr.WHOOSH and chosen[2] in tr.WHOOSH and chosen[0] != chosen[2]
+
+
+# --- phase 2: a tripod clip drifts gently instead of sitting frozen -----------------------------------------
+def test_a_tripod_clip_is_flagged_still_and_a_moving_one_is_not(monkeypatch):
+    import numpy as np
+
+    from vidgen.assemble import focus
+    rng = np.random.default_rng(1)
+    base = (rng.random((180, 320, 3)) * 255).astype(np.uint8)
+    moving = [np.roll(base, 25 * k, axis=1) for k in range(5)]
+    for frames, still in (([base] * 5, True), (moving, False)):
+        monkeypatch.setattr(focus, "_frames", lambda *a, f=frames: f)
+        assert focus.analyse(Path("c.mp4"), "video", 0, 3, 9 / 16).still is still
+    monkeypatch.setattr(focus, "_frames", lambda *a: [base])
+    assert focus.analyse(Path("i.jpg"), "image", 0, 3, 9 / 16).still is False     # stills have Ken Burns
+
+
+def test_a_still_clip_drifts_on_the_same_eased_curve_and_a_moving_one_does_not():
+    from vidgen.assemble.clips import _stream
+    from vidgen.assemble.focus import Focus
+    still = Shot(1, 0, "video", Path("a.mp4"), 0.0, 90, "none", focus=Focus(0.5, 0.0, still=True))
+    moving = Shot(1, 0, "video", Path("a.mp4"), 0.0, 90, "none")
+    drift = _stream(still, P, 5, 95, 90)
+    assert "cos(PI*min(1,(n+5)/95))" in drift and "crop=" in drift
+    assert "n+" not in _stream(moving, P, 5, 95, 90)

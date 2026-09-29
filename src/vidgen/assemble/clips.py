@@ -3,9 +3,10 @@
 Editing choices (why the video feels cut, not assembled):
 - pacing: a scene longer than SHOT_MAX is split into 2-3 shots, from the scene's extra clips or
   different parts of the same clip; clips skip their first LEAD_IN seconds (fades, pans in)
-- motion: stock video keeps its own camera movement (an added zoom on top looks fake); still images
-  slowly push in, pull out or pan (Ken Burns) on an S-curve: easing in and out reads as a camera
-  operator, a constant speed as a slideshow
+- motion: stock video keeps its own camera movement (an added zoom on top looks fake), except a tripod
+  clip (focus.still), which drifts a few percent so it doesn't sit frozen; still images slowly push in,
+  pull out or pan (Ken Burns). Both follow an S-curve: easing in and out reads as a camera operator, a
+  constant speed as a slideshow
 - transitions: straight cuts inside a scene (and out of a scene too brief to dissolve out of); the last
   TRANSITION seconds of a scene cross into the next scene's first shot, at the short pause in the voice,
   with the xfade that matches the sound there (assemble/transitions.py), rendered inside the outgoing
@@ -39,6 +40,8 @@ OVERSIZE = 1.12        # images are rendered larger than the output so Ken Burns
 MOTION = 0.08          # zoom amount over a shot
 MOTIONS = ("push", "pan_r", "pull", "push", "pan_l")
 PUNCH_IN = 0.22        # a clip reused within a scene is framed tighter, so the cut reads as a new shot
+DRIFT = 0.04           # a tripod clip's camera travels this share of the frame over a shot...
+DRIFT_SCALE = 1.06     # ...on a frame this much larger, so the drift never reveals an edge
 GRADE = "eq=brightness={b:.3f}:contrast=1.04:saturation=1.08,vignette=angle=0.45,noise=alls=3:allf=t"
 
 
@@ -121,11 +124,16 @@ def plan_shots(timeline: Timeline, assets: list[Asset], p: FormatPreset, fmt: st
     return shots
 
 
+def _ease(var: str, t0: int, span: int) -> str:
+    """Camera progress 0→1 across the shot's whole span (including the part already shown inside the
+    previous segment's cross-fade), so motion never jumps; eased (1-cos(πx))/2: the camera starts and
+    settles gently instead of moving at a constant speed. `var` is the filter's frame counter."""
+    return f"((1-cos(PI*min(1,({var}+{t0})/{max(span, 1)})))/2)"
+
+
 def _motion(shot: Shot, p: FormatPreset, t0: int, span: int) -> str:
-    """zoompan on an oversized frame; progress P runs 0→1 across the shot's whole span (including the
-    part already shown inside the previous segment's cross-fade), so motion never jumps. P is eased
-    (1-cos(πx))/2: the camera starts and settles gently instead of moving at a constant speed."""
-    prog = f"((1-cos(PI*min(1,(on+{t0})/{max(span, 1)})))/2)"
+    """zoompan on an oversized frame, along _ease."""
+    prog = _ease("on", t0, span)
     base = 1 + shot.punch
     z = {"push": f"{base}+{MOTION}*{prog}", "pull": f"{base + MOTION}-{MOTION}*{prog}"}.get(shot.motion,
                                                                                          f"{base + MOTION}")
@@ -142,9 +150,15 @@ def _stream(shot: Shot, p: FormatPreset, t0: int, span: int, frames: int) -> str
     grade = GRADE.format(b=shot.focus.brightness)
     if shot.kind == "video":
         # a punch-in is a tighter static framing: scale up, then crop the output size around the subject
-        ws, hs = round(w * (1 + shot.punch) / 2) * 2, round(h * (1 + shot.punch) / 2) * 2
+        grow = (1 + shot.punch) * (DRIFT_SCALE if shot.focus.still else 1)
+        ws, hs = round(w * grow / 2) * 2, round(h * grow / 2) * 2
+        x, y = f"(iw-ow)*{shot.focus.x:.3f}", "(ih-oh)/2"
+        if shot.focus.still:  # the crop window travels along the eased curve, direction alternating per shot
+            d, prog = (1 if (shot.scene_id + shot.index) % 2 else -1), _ease("n", t0, span)
+            x = f"'max(0,min(iw-ow,{x}+{d * DRIFT * w:.1f}*({prog}-0.5)))'"
+            y = f"'max(0,min(ih-oh,{y}+{-d * DRIFT * h / 2:.1f}*({prog}-0.5)))'"
         return (f"fps={p.fps},scale={ws}:{hs}:force_original_aspect_ratio=increase,"
-                f"crop={w}:{h}:x=(iw-ow)*{shot.focus.x:.3f}:y=(ih-oh)/2,{grade},{tail}")
+                f"crop={w}:{h}:x={x}:y={y},{grade},{tail}")
     wo, ho = round(w * OVERSIZE / 2) * 2, round(h * OVERSIZE / 2) * 2
     return (f"scale={wo}:{ho}:force_original_aspect_ratio=increase,"
             f"crop={wo}:{ho}:x=(iw-ow)*{shot.focus.x:.3f}:y=(ih-oh)/2,"

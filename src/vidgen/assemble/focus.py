@@ -18,12 +18,16 @@ ANALYSIS_WIDTH = 320
 DETECTED_WEIGHT = 0.75   # blend with the centre: a wrong guess should not swing to a far edge
 TARGET_LUMA = 0.46       # 0..1 mean luma everything is nudged toward
 MAX_BRIGHTNESS_SHIFT = 0.10
+# mean frame difference below this = a tripod shot. On 102 real stock clips ~20 % were under it (desk
+# close-ups, a talking head, a night sky), all visibly frozen for the 3 s a shot lasts
+STILL_MOTION = 0.03
 
 
 @dataclass
 class Focus:
     x: float = 0.5          # 0 = crop from the left edge, 1 = from the right edge
     brightness: float = 0.0  # ffmpeg eq brightness offset (-1..1)
+    still: bool = False      # a video with almost no motion of its own: gets a slow camera drift (clips.py)
 
 
 def _frames(path: Path, kind: str, start: float, duration: float) -> list[np.ndarray]:
@@ -73,14 +77,15 @@ def analyse(path: Path, kind: str, start: float, duration: float, out_aspect: fl
     grays = [_small_gray(f) for f in frames]
     luma = float(np.mean([g.mean() for g in grays]))
     brightness = float(np.clip((TARGET_LUMA - luma) * 0.5, -MAX_BRIGHTNESS_SHIFT, MAX_BRIGHTNESS_SHIFT))
+    diffs = [np.abs(b - a) for a, b in zip(grays, grays[1:])]
+    still = kind == "video" and bool(diffs) and float(np.mean([d.mean() for d in diffs])) < STILL_MOTION
 
     h, w = grays[0].shape
     frac = (out_aspect * h) / w  # share of the source width that survives the crop
     if frac >= 0.98:
-        return Focus(0.5, brightness)  # same shape as the output: nothing to choose
+        return Focus(0.5, brightness, still)  # same shape as the output: nothing to choose
     edges = sum(np.abs(cv2.Laplacian(g, cv2.CV_32F)) for g in grays) / len(grays)
-    motion = (sum(np.abs(b - a) for a, b in zip(grays, grays[1:])) / max(len(grays) - 1, 1)
-              if len(grays) > 1 else np.zeros_like(grays[0]))
+    motion = sum(diffs) / len(diffs) if diffs else np.zeros_like(grays[0])
     energy = (edges + 2.0 * motion).sum(axis=0)  # moving things are the subject more often than texture
     x = best_window(energy, frac)
-    return Focus(0.5 + DETECTED_WEIGHT * (x - 0.5), brightness)
+    return Focus(0.5 + DETECTED_WEIGHT * (x - 0.5), brightness, still)
