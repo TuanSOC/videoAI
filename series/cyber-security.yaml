@@ -9,6 +9,7 @@ start: 2026-10-05
 weekdays: [mon, wed, fri]
 format: short
 langs: [vi, en]
+look: cyber_tech     # one colour look for the whole series (teal shadows, warm highlights)
 
 pillars:
   attacks: "Tấn công nổi tiếng — một vụ có thật, kể như một câu chuyện: chuyện gì xảy ra, vì sao, bài học"

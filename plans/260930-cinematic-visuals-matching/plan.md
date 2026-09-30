@@ -32,7 +32,7 @@ own phase, chosen later; the quality gate only raises the bar when a generator i
 | 1 | [DP prompting engine](./phase-01-dp-prompting-engine.md) | Completed |
 | 2 | [Quality-gated selection](./phase-02-quality-gated-selection.md) | Completed |
 | 3 | [Zero-cost AI image source](./phase-03-zero-cost-ai-image-source.md) | Pending (source to choose) |
-| 4 | [Unified aesthetic grading](./phase-04-unified-aesthetic-grading.md) | Pending |
+| 4 | [Unified aesthetic grading](./phase-04-unified-aesthetic-grading.md) | Completed |
 
 ## Constraints
 $0; RTX 4060 8 GB (no VRAM fight with Ollama); short render ≤ 4 min; full suite green (379 now).

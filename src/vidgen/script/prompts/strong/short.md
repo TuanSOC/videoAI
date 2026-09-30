@@ -55,3 +55,4 @@ Rules:
 - `ai_prompt`: for EVERY scene (stock too: it is drawn when no stock clip fits) — ONE English shot note like a director of photography's: camera (extreme macro / low angle / POV / aerial drone) + the subject in action (literal or the metaphor) + lighting (moody chiaroscuro / dramatic rim light / neon glow / golden hour) + setting; vertical 9:16 composition, photorealistic. No text, logos or real people's faces.
 - `title`: catchy, under 70 characters, in $lang_name.
 - `mood`: the background music that fits, exactly one of: $moods.
+- `look`: the colour grade for the whole video, exactly one of: $looks (dark_mystery: mystery, crime, the unexplained; cyber_tech: hacking, AI, technology; vintage_archive: history, war, the past; neutral: anything else).

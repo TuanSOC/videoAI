@@ -71,6 +71,7 @@ class Script(BaseModel):
     scenes: list[Scene] = Field(min_length=1)
     sources: list[SourceRef] = []  # reference pages the facts were drawn from
     mood: str = ""  # background music mood (assemble/music.py MOODS); "" = any track
+    look: str = "neutral"  # colour grade for the whole video (assemble/looks.py LOOKS)
 
     @property
     def word_count(self) -> int:

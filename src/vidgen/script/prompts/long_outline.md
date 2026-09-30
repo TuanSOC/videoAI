@@ -11,6 +11,7 @@ Rules:
 - Language: $lang_name.
 - `title`: compelling, under 70 characters.
 - `mood`: the background music that fits, exactly one of: $moods.
+- `look`: the colour grade for the whole video, exactly one of: $looks (dark_mystery: mystery, crime, the unexplained; cyber_tech: hacking, AI, technology; vintage_archive: history, war, the past; neutral: anything else).
 - `hook`: 2-3 spoken sentences for the first 15 seconds that promise what the viewer will learn and create curiosity.
 - `hook_visual_query`: ALWAYS in English, 2-4 concrete filmable nouns for stock footage matching the hook (e.g. "desert caravan camels"). No names of real people.
 - `chapters`: $chapter_count chapters in a logical story arc (setup → deeper details → surprising turn → conclusion). Each has a short `title` and a 2-3 sentence `summary` of what it covers.

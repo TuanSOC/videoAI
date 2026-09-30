@@ -6,6 +6,7 @@ from itertools import groupby
 
 from pydantic import BaseModel, Field
 
+from vidgen.assemble.looks import normalize_look
 from vidgen.assemble.music import MOODS
 from vidgen.config import LANG_NAMES, Format, FormatPreset, Lang
 from vidgen.models import Angle, Scene, Script, SourceRef, VisualType
@@ -40,6 +41,7 @@ class ShortDraft(BaseModel):
     title: str
     hook: str
     mood: str = ""
+    look: str = "neutral"
     # required (no default): Ollama's structured output then forces the model to fill them — as
     # optional fields the 8B model simply left them out
     open_loop: str     # the question scene 2 raises...
@@ -71,6 +73,7 @@ class Outline(BaseModel):
     hook: str
     hook_visual_query: str = Field(description="English stock footage query for the hook")
     mood: str = ""
+    look: str = "neutral"
     chapters: list[Chapter] = Field(min_length=2)
 
 
@@ -110,13 +113,13 @@ def generate(topic: str, fmt: Format, lang: Lang, preset: FormatPreset, llm: LLM
     seconds = target_seconds(preset)
     words = int(seconds * WORDS_PER_SECOND[lang])
     if fmt == "short":
-        title, hook, mood, scenes = _generate_short(topic, lang, preset, llm, seconds, words, ctx, body, angle)
+        title, hook, mood, look, scenes = _generate_short(topic, lang, preset, llm, seconds, words, ctx, body, angle)
     else:
-        title, hook, mood, scenes = _generate_long(topic, lang, preset, llm, seconds, words, ctx, body)
+        title, hook, mood, look, scenes = _generate_long(topic, lang, preset, llm, seconds, words, ctx, body)
     if angle is not None:
         title = angle.title
     return Script(title=plain(title), hook=plain(hook), lang=lang, format=fmt,
-                  mood=normalize_mood(mood),
+                  mood=normalize_mood(mood), look=normalize_look(look),
                   scenes=postprocess(scenes, preset.max_ai_video),
                   sources=[SourceRef(title=s.title, url=s.url) for s in sources])
 
@@ -315,7 +318,7 @@ def _generate_short(topic, lang, preset, llm, seconds, words, ctx, body, angle=N
     scenes = ensure_closing_question(scenes, topic, lang, llm)
     hook = fix_hook(scenes[0].narration, topic, lang, ctx, llm)
     scenes[0] = scenes[0].model_copy(update={"narration": hook})
-    return draft.title, hook, draft.mood, scenes
+    return draft.title, hook, draft.mood, draft.look, scenes
 
 
 def _similar(a: str, b: str, share: float = 0.6) -> bool:
@@ -431,7 +434,7 @@ def _generate_long(topic, lang, preset, llm, seconds, words, ctx, body):
         scenes += [Scene(id=0, chapter=ch.title, **s.model_dump()) for s in draft.scenes]
     if len(scenes) == 1:
         raise LLMError("no chapter could be written")
-    return outline.title, outline.hook, outline.mood, scenes
+    return outline.title, outline.hook, outline.mood, outline.look, scenes
 
 
 # --- post-processing -------------------------------------------------------------------

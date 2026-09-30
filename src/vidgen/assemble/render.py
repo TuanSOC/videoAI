@@ -116,7 +116,7 @@ def final_args(duration: float, music: Path | None, music_start: float = 0.0,
 
 
 def render_video(script: Script, timeline: Timeline, assets: list[Asset], preset: FormatPreset,
-                 out_dir: Path, seed: str, sfx_density: str | None = "subtle") -> Path:
+                 out_dir: Path, seed: str, sfx_density: str | None = "subtle", look: str | None = None) -> Path:
     """sfx_density: a sfx.DENSITY preset, or None for no sound effects."""
     # sound first: each scene change's transition follows the cue planned there (assemble/transitions.py)
     scene_cuts: list[float] = []
@@ -125,7 +125,8 @@ def render_video(script: Script, timeline: Timeline, assets: list[Asset], preset
         scene_cuts[:] = cuts
         return sound.detect_cues(script, timeline, cuts, sfx_density, seed) if sfx_density else []
 
-    segments, cues = render_segments(assets, timeline, preset, out_dir, script.format, cues_for=plan_sound)
+    segments, cues = render_segments(assets, timeline, preset, out_dir, script.format, cues_for=plan_sound,
+                                     look=look or script.look)
     (out_dir / "segments" / "list.txt").write_text(
         "".join(f"file '{p.name}'\n" for p in segments), encoding="utf-8")
     (out_dir / "subs.ass").write_text(build_ass(script, timeline, preset), encoding="utf-8")

@@ -8,6 +8,7 @@ from pathlib import Path
 from string import Template
 from typing import Callable
 
+from vidgen.assemble.looks import LOOKS
 from vidgen.assemble.music import MOODS
 
 PROMPTS = Path(__file__).parent / "prompts"
@@ -16,6 +17,7 @@ PROMPTS = Path(__file__).parent / "prompts"
 def render(name: str, tier: str = "base", **values) -> str:
     """A missing $placeholder raises KeyError: better at the first call than a half-filled prompt."""
     values.setdefault("moods", ", ".join(MOODS))
+    values.setdefault("looks", ", ".join(LOOKS))
     path = PROMPTS / "strong" / name if tier == "strong" and (PROMPTS / "strong" / name).exists() else PROMPTS / name
     return Template(path.read_text(encoding="utf-8")).substitute(**values)
 

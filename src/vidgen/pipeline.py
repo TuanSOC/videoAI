@@ -97,7 +97,8 @@ def _render(job: Job) -> None:
     assets = job.read_assets()
     sfx = job.settings.pipeline.sfx
     render_video(script, job.read_timeline(), assets, job.settings.preset(script.format),
-                 job.out_dir, seed=job.out_dir.name, sfx_density=sfx.density if sfx.enabled else None)
+                 job.out_dir, seed=job.out_dir.name, sfx_density=sfx.density if sfx.enabled else None,
+                 look=_load_state(job.out_dir).get("look"))   # a series pins its channel look here
     meta_path = job.out_dir / "metadata.json"
     if meta_path.exists():  # re-render after a clip swap: keep the LLM text, refresh footage credits
         from vidgen.metadata import Metadata, rebuild_description, save_metadata

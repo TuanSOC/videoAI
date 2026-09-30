@@ -45,6 +45,7 @@ class Series(BaseModel):
     weekdays: list[Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]]
     format: Literal["short", "long"] = "short"
     langs: list[Literal["vi", "en"]]
+    look: str | None = None        # pin one colour look for the whole series (assemble/looks.py); None = per video
     pillars: dict[str, str] = {}   # pillar → what it covers (documentation for whoever extends the frame)
     episodes: list[Episode]
 
@@ -59,6 +60,9 @@ class Series(BaseModel):
                 raise ValueError(f"episode {e.id}: no topic for {', '.join(missing)}")
         if not self.weekdays:
             raise ValueError("weekdays must not be empty")
+        from vidgen.assemble.looks import LOOKS
+        if self.look is not None and self.look not in LOOKS:
+            raise ValueError(f"look must be one of {', '.join(LOOKS)}")
         return self
 
 
@@ -118,6 +122,8 @@ def _create(e: Episode, lang: str, s: Series, fmt: str, settings: Settings) -> P
     out_dir = pipeline.init_video(e.topic[lang], fmt, lang, settings)
     state = pipeline.load_state(out_dir)
     state["series"] = {"name": s.name, "episode": e.id, "angle": e.angle}   # _finish writes this angle
+    if s.look:
+        state["look"] = s.look   # render uses it instead of the writer's pick: one look for the channel
     pipeline.save_state(out_dir, state)
     return out_dir
 

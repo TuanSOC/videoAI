@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from vidgen import ffmpeg
+from vidgen.assemble import looks
 from vidgen.assemble.focus import Focus, analyse
 from vidgen.config import FormatPreset
 from vidgen.models import Asset, Timeline
@@ -42,7 +43,6 @@ MOTIONS = ("push", "pan_r", "pull", "push", "pan_l")
 PUNCH_IN = 0.22        # a clip reused within a scene is framed tighter, so the cut reads as a new shot
 DRIFT = 0.04           # a tripod clip's camera travels this share of the frame over a shot...
 DRIFT_SCALE = 1.06     # ...on a frame this much larger, so the drift never reveals an edge
-GRADE = "eq=brightness={b:.3f}:contrast=1.04:saturation=1.08,vignette=angle=0.45,noise=alls=3:allf=t"
 # every segment leaves in one delivery format: xfade negotiates yuv444p and full-range stock clips arrive as
 # yuvj (seen live: 4 formats in one video, stream-copied into a yuv444p final.mp4 phones can't play)
 DELIVERY = "scale=out_range=tv,format=yuv420p"
@@ -76,6 +76,7 @@ class Shot:
     analyse: bool = True         # False: keep the source's own framing/exposure (document cards)
     card: bool = False           # a document card (visuals/document.py)
     transition: str = "fade"     # the xfade into this shot when transition_in (assemble/transitions.py)
+    look: str = "neutral"        # colour grade (assemble/looks.py); evidence cards always neutral
 
 
 def fade_frames(p: FormatPreset) -> int:
@@ -83,7 +84,7 @@ def fade_frames(p: FormatPreset) -> int:
 
 
 def plan_shots(timeline: Timeline, assets: list[Asset], p: FormatPreset, fmt: str, src_dir: Path,
-               clip_seconds: dict[Path, float]) -> list[Shot]:
+               clip_seconds: dict[Path, float], look: str = "neutral") -> list[Shot]:
     """Pure planning (tested without ffmpeg): how many shots per scene, which source and which part."""
     by_scene = {a.scene_id: a for a in assets}
     tf = fade_frames(p)
@@ -117,7 +118,7 @@ def plan_shots(timeline: Timeline, assets: list[Asset], p: FormatPreset, fmt: st
                               MOTIONS[(si + k) % len(MOTIONS)] if kind == "image" else "none",
                               transition_in=(k == 0 and si > 0),
                               punch=PUNCH_IN if j > 0 and kind != "color" else 0.0, analyse=not card,
-                              card=card))
+                              card=card, look="neutral" if card else look))
     # a cross-fade needs room on both sides, and a scene this brief is left with a straight cut: dissolving
     # out of it would blur most of what it shows
     for prev, cur in zip(shots, shots[1:]):
@@ -150,7 +151,7 @@ def _stream(shot: Shot, p: FormatPreset, t0: int, span: int, frames: int) -> str
     tail = f"trim=end_frame={frames},setpts=PTS-STARTPTS,setsar=1,format=yuv420p"
     if shot.kind == "color":
         return f"scale={w}:{h},{tail}"
-    grade = GRADE.format(b=shot.focus.brightness)
+    grade = looks.grade(shot.look, shot.focus.brightness)
     if shot.kind == "video":
         # a punch-in is a tighter static framing: scale up, then crop the output size around the subject
         grow = (1 + shot.punch) * (DRIFT_SCALE if shot.focus.still else 1)
@@ -217,7 +218,8 @@ def _analyse_all(shots: list[Shot], p: FormatPreset) -> None:
 
 
 def render_segments(assets: list[Asset], timeline: Timeline, p: FormatPreset, out_dir: Path, fmt: str = "short",
-                    cues_for: Callable[[list[float]], list] | None = None) -> tuple[list[Path], list]:
+                    cues_for: Callable[[list[float]], list] | None = None,
+                    look: str = "neutral") -> tuple[list[Path], list]:
     """Segment files in order, and the sound cues. The cues are planned from the shot plan's scene-change
     times BEFORE rendering (`cues_for`), because each scene change's transition follows its cue."""
     seg_dir = out_dir / "segments"
@@ -228,7 +230,7 @@ def render_segments(assets: list[Asset], timeline: Timeline, p: FormatPreset, ou
     videos |= {out_dir / x for a in assets for x in a.extra if x.endswith(".mp4")}
     with ThreadPoolExecutor(4) as pool:
         clip_seconds = dict(zip(videos, pool.map(_safe_duration, videos)))
-    shots = plan_shots(timeline, assets, p, fmt, out_dir, clip_seconds)
+    shots = plan_shots(timeline, assets, p, fmt, out_dir, clip_seconds, look)
     cues = cues_for(cut_times(shots, p.fps)) if cues_for else []
     from vidgen.assemble.transitions import assign_transitions   # transitions imports Shot from here
     assign_transitions(shots, cues, p.fps)
