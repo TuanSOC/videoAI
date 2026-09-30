@@ -390,22 +390,15 @@ def invalidate_stage(out_dir: Path, stage: str) -> None:
     _remove_outputs(out_dir, STAGES[STAGE_NAMES.index(stage)])
 
 
-class FolderBusyError(RuntimeError):
-    pass
+from vidgen.folderlock import FolderBusyError, FolderLock, holder, is_locked  # noqa: E402,F401  (re-exported)
 
 
 def ensure_not_busy(out_dir: Path) -> None:
-    """The web studio records its running job in job.json: don't run a second pipeline on the folder."""
-    job = out_dir / "job.json"
-    if not job.exists():
-        return
-    try:
-        status = json.loads(job.read_text(encoding="utf-8")).get("status")
-    except ValueError:
-        return
-    if status in ("queued", "running"):
-        raise FolderBusyError(f"{out_dir.name} has a {status} job in the web studio — wait for it or "
-                              "restart `vidgen ui` (which marks a dead job interrupted)")
+    """Refuse a folder another owner is working on (folderlock.py). A job.json left "running" by a process that
+    died does not count: only a live owner holds the lock."""
+    if is_locked(out_dir):
+        who = holder(out_dir)
+        raise FolderBusyError(f"{out_dir.name} is being worked on{f' ({who})' if who else ''} — wait for it to finish")
 
 
 def script_changed(out_dir: Path) -> bool:

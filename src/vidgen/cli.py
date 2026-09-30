@@ -45,8 +45,17 @@ def _print_script(out_dir: Path) -> None:
 
 
 def _run(out_dir: Path, force: str | None) -> None:
+    from vidgen.folderlock import FolderBusyError, FolderLock
     from vidgen.pipeline import run_stages
 
+    try:
+        with FolderLock(out_dir, "cli"):   # one owner per folder: the studio or a series run can't join in
+            _run_locked(out_dir, force, run_stages)
+    except FolderBusyError as e:
+        raise typer.BadParameter(str(e)) from e
+
+
+def _run_locked(out_dir: Path, force: str | None, run_stages) -> None:
     def show(name: str, status: str) -> None:
         console.print(f"  {name:<9} {status}")
 
@@ -96,18 +105,14 @@ def resume(
                                      "voice | visuals | render | metadata"),
 ) -> None:
     """Continue a video from its first missing artifact."""
-    from vidgen.pipeline import STAGE_NAMES, FolderBusyError, ensure_not_busy, resolve_output_dir
+    from vidgen.pipeline import STAGE_NAMES, resolve_output_dir
 
     if force and force not in STAGE_NAMES:
         raise typer.BadParameter(f"--force must be one of {', '.join(STAGE_NAMES)}")
     out_dir = resolve_output_dir(slug, get_settings())
     if not (out_dir / "script.json").exists():
         raise typer.BadParameter(f"no script.json in {out_dir}")
-    try:
-        ensure_not_busy(out_dir)
-    except FolderBusyError as e:
-        raise typer.BadParameter(str(e)) from e
-    _run(out_dir, force)
+    _run(out_dir, force)   # refuses a folder another owner is working on
 
 
 @app.command()

@@ -69,10 +69,10 @@ def test_script_changed_after_render(tmp_path, fake_stages):
 
 
 def test_busy_folder_is_refused(tmp_path):
-    (tmp_path / "job.json").write_text(json.dumps({"slug": "x", "kind": "render", "status": "running"}))
-    with pytest.raises(pipeline.FolderBusyError):
-        pipeline.ensure_not_busy(tmp_path)
-    (tmp_path / "job.json").write_text(json.dumps({"slug": "x", "kind": "render", "status": "done"}))
+    from vidgen.folderlock import FolderLock
+    with FolderLock(tmp_path, "render"):                 # busy = a live owner holds the folder lock
+        with pytest.raises(pipeline.FolderBusyError):
+            pipeline.ensure_not_busy(tmp_path)
     pipeline.ensure_not_busy(tmp_path)
 
 

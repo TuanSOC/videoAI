@@ -615,3 +615,20 @@ def test_changing_the_look_is_a_render_setting_not_a_script_edit(env):
     assert pipeline.load_state(d)["look"] == "cyber_tech" and (d / "script.json").read_bytes() == before
     assert client.get(f"/api/videos/{slug}").json()["look"] == "cyber_tech"
     assert client.post(f"/api/videos/{slug}/look", json={"look": "teal"}).status_code == 422
+
+
+def test_the_studio_respects_a_folder_another_process_works_on(env):
+    """Seen in review: the studio only knew its own jobs; a series run's folder could get a second pipeline."""
+    from vidgen.folderlock import FolderLock
+    from vidgen.web.jobs import load_job
+    client, jobs, _, s = env
+    slug = create(client, jobs)
+    d = s.pipeline.output_dir / slug
+    (d / "job.json").write_text(json.dumps({"slug": slug, "kind": "series", "status": "running"}), encoding="utf-8")
+    with FolderLock(d, "series"):                   # stands in for a `vidgen series` process
+        assert client.post(f"/api/videos/{slug}/render", json={}).status_code == 409
+        assert client.post(f"/api/videos/{slug}/look", json={"look": "cyber_tech"}).status_code == 409
+        assert client.get(f"/api/videos/{slug}").json()["job"]["status"] == "running"
+    # the owner is gone: its leftover "running" is shown as interrupted and the studio can work again
+    assert client.get(f"/api/videos/{slug}").json()["job"]["status"] == "interrupted"
+    assert client.post(f"/api/videos/{slug}/render", json={}).status_code == 200

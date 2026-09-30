@@ -53,9 +53,12 @@ def load_job(out_dir: Path) -> JobStatus | None:
 
 
 def mark_interrupted(out_dir: Path) -> bool:
-    """On server start: a job recorded as queued/running can't still be running. Returns True if changed."""
+    """A job recorded as queued/running whose owner is gone (nobody holds the folder lock) was cut off.
+    A folder another process still works on (a `vidgen series` run) is left alone. Returns True if changed."""
+    from vidgen.folderlock import is_locked
+
     job = load_job(out_dir)
-    if job is None or job.status not in ACTIVE:
+    if job is None or job.status not in ACTIVE or is_locked(out_dir):
         return False
     job.status, job.finished_at = "interrupted", time.time()
     job.save()
@@ -91,6 +94,10 @@ class JobQueue:
     def submit(self, slug: str, kind: str, work: Work, out_dir: Path | None = None,
                options: dict | None = None) -> JobStatus:
         options = options or {}
+        if out_dir is not None:
+            from vidgen.folderlock import holder, is_locked
+            if is_locked(out_dir):   # another process (a `vidgen series` run, the CLI) is working on it
+                raise JobBusyError(f"{slug} is being worked on by another process ({holder(out_dir)})")
         with self._lock:
             active = self._jobs.get(slug)
             if active and active.status in ACTIVE:
@@ -123,7 +130,12 @@ class JobQueue:
             job.status = "running"
             try:
                 job.save()
-                work(job)
+                if job.out_dir is None:
+                    work(job)
+                else:
+                    from vidgen.folderlock import FolderLock
+                    with FolderLock(job.out_dir, job.kind):   # freed by the OS even if this process dies
+                        work(job)
                 job.status = "done"
             except Exception as e:  # surface to the UI instead of killing the worker
                 log.exception("job %s/%s failed", job.slug, job.kind)

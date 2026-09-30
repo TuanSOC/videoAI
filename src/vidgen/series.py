@@ -132,38 +132,40 @@ def _finish(out_dir: Path, settings: Settings) -> dict:
     """Brief (if missing) → the recorded angle → script (if missing) → every remaining stage.
 
     The folder must not be worked on twice at once (seen live: this run and a studio render on one folder —
-    one deleted the other's segments): a studio job refuses it here, and while this runs job.json says
-    "running", so the studio refuses to start one (and shows the progress)."""
+    one deleted the other's segments). The whole run holds the folder lock (folderlock.py): a studio job or
+    another run is refused, and the OS frees it however this process ends. job.json shows the progress."""
     from vidgen import pipeline
+    from vidgen.folderlock import FolderLock
     from vidgen.web.jobs import JobStatus
 
-    pipeline.ensure_not_busy(out_dir)   # raises FolderBusyError
-    job = JobStatus(out_dir.name, "series", status="running", out_dir=out_dir)
-    job.save()
+    with FolderLock(out_dir, "series"):   # raises FolderBusyError if another owner works on it
+        job = JobStatus(out_dir.name, "series", status="running", out_dir=out_dir)
+        job.save()
 
-    def on_stage(name: str, status: str) -> None:
-        job.stages[name], job.current = status, name if status == "run" else ""
-        job.save()
-    try:
-        if pipeline.load_brief(out_dir) is None:
-            on_stage("brief", "run")
-            pipeline.write_brief(out_dir, settings)
-            on_stage("brief", "done")
-        if not (out_dir / "script.json").exists():
-            brief = pipeline.load_brief(out_dir)
-            style = pipeline.load_state(out_dir).get("series", {}).get("angle", "explain")
-            pipeline.choose_angle(out_dir, angle_index(brief, style))
-            on_stage("script", "run")
-            pipeline.write_script(out_dir, settings)
-            on_stage("script", "done")
-        pipeline.run_stages(out_dir, settings, on_stage=on_stage)
-        job.status = "done"
-    except Exception as e:
-        job.status, job.error = "error", str(e)
-        raise
-    finally:
-        job.current, job.finished_at = "", time.time()
-        job.save()
+        def on_stage(name: str, status: str) -> None:
+            job.stages[name], job.current = status, name if status == "run" else ""
+            job.save()
+        try:
+            if pipeline.load_brief(out_dir) is None:
+                on_stage("brief", "run")
+                pipeline.write_brief(out_dir, settings)
+                on_stage("brief", "done")
+            if not (out_dir / "script.json").exists():
+                brief = pipeline.load_brief(out_dir)
+                style = pipeline.load_state(out_dir).get("series", {}).get("angle", "explain")
+                pipeline.choose_angle(out_dir, angle_index(brief, style))
+                on_stage("script", "run")
+                pipeline.write_script(out_dir, settings)
+                on_stage("script", "done")
+            pipeline.run_stages(out_dir, settings, on_stage=on_stage)
+            job.status = "done"
+        except BaseException as e:   # Ctrl-C too: the status must never stay "running"
+            job.status = "interrupted" if isinstance(e, KeyboardInterrupt) else "error"
+            job.error = str(e) or type(e).__name__
+            raise
+        finally:
+            job.current, job.finished_at = "", time.time()
+            job.save()
     fc = out_dir / "factcheck.json"
     return {"flags": len(json.loads(fc.read_text(encoding="utf-8")).get("issues", [])) if fc.exists() else None}
 

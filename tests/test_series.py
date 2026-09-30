@@ -87,9 +87,10 @@ def test_finish_refuses_a_folder_the_studio_is_working_on_and_marks_its_own_work
     from vidgen.web.jobs import load_job
     d = tmp_path / "v"
     d.mkdir()
-    (d / "job.json").write_text(json.dumps({"slug": "v", "kind": "render", "status": "running"}), encoding="utf-8")
-    with pytest.raises(pipeline.FolderBusyError):
-        sr._finish(d, settings=None)
+    from vidgen.folderlock import FolderLock
+    with FolderLock(d, "render"):                        # the studio (or another run) owns the folder
+        with pytest.raises(pipeline.FolderBusyError):
+            sr._finish(d, settings=None)
 
     (d / "job.json").write_text(json.dumps({"slug": "v", "kind": "render", "status": "error"}), encoding="utf-8")
     (d / "script.json").write_text("{}", encoding="utf-8")
@@ -105,3 +106,23 @@ def test_finish_refuses_a_folder_the_studio_is_working_on_and_marks_its_own_work
     sr._finish(d, settings=None)
     job = load_job(d)
     assert seen == ["running", "voice"] and job.status == "done" and job.kind == "series"
+
+
+def test_ctrl_c_leaves_the_episode_interrupted_and_the_folder_free(tmp_path, monkeypatch):
+    from vidgen import pipeline
+    from vidgen.folderlock import is_locked
+    from vidgen.web.jobs import load_job
+    d = tmp_path / "v"
+    d.mkdir()
+    (d / "script.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(pipeline, "load_brief", lambda out_dir: Brief(topic="t", angles=[
+        Angle(style="story", title="T", hook="h", key_points=["k"])]))
+
+    def stages(out_dir, settings, on_stage=lambda n, st: None):
+        assert is_locked(out_dir)                      # held for the whole run
+        raise KeyboardInterrupt
+    monkeypatch.setattr(pipeline, "run_stages", stages)
+    with pytest.raises(KeyboardInterrupt):
+        sr._finish(d, settings=None)
+    assert load_job(d).status == "interrupted" and not is_locked(d)
+    pipeline.ensure_not_busy(d)                        # the next run may take it

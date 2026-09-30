@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from vidgen import pipeline
 from vidgen.assemble.looks import LOOKS
+from vidgen.folderlock import is_locked
 from vidgen.config import SECRET_KEYS, Settings, get_settings, update_env_file
 from vidgen.fsutil import write_atomic
 from vidgen.models import Asset, Script
@@ -178,8 +179,17 @@ def create_app(settings: Callable[[], Settings] = get_settings,
                 mark_interrupted(d)
 
     def job_of(d: Path) -> JobStatus | None:
-        """Live job from this process, else the last one persisted on disk."""
-        return jobs.get(d.name) or load_job(d)
+        """Live job from this process, else the last one persisted on disk — marked interrupted if its owner
+        (another process) died since, so the UI never shows a job running forever."""
+        live = jobs.get(d.name)
+        if live is not None and live.status in ("queued", "running"):
+            return live
+        mark_interrupted(d)
+        disk = load_job(d)
+        # a newer job on disk was written by another process (a `vidgen series` run) after ours finished
+        if disk is not None and (live is None or disk.queued_at > live.queued_at):
+            return disk
+        return live
 
     def video_dir(slug: str) -> Path:
         if not SLUG_RE.match(slug):
@@ -365,7 +375,7 @@ def create_app(settings: Callable[[], Settings] = get_settings,
         if not lock.acquire(blocking=False):
             raise HTTPException(409, "video đang được thao tác (ví dụ đang đổi clip) — thử lại sau giây lát")
         try:
-            if check_busy and jobs.busy(slug):
+            if check_busy and (jobs.busy(slug) or is_locked(video_dir(slug))):
                 raise HTTPException(409, "a job is running for this video")
             yield
         except JobBusyError as e:  # JobQueue.submit refusing a second job for the same video
@@ -467,7 +477,8 @@ def create_app(settings: Callable[[], Settings] = get_settings,
 
     @app.post("/api/videos/{slug}/look")
     def set_look(slug: str, req: LookRequest) -> dict:
-        """Colour look for the next render (state.json, like a series' pinned look); the script is untouched."""
+        """Colour look for the next render (state.json, like a series' pinned look); the script is untouched.
+        Refused while a pipeline works on the folder: its own state.json writes would race this one."""
         d = video_dir(slug)
         with exclusive(slug):
             state = pipeline.load_state(d)
