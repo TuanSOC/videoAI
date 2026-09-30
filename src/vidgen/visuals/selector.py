@@ -187,9 +187,10 @@ JUDGE_TOP = 5
 class Selector:
     def __init__(self, clients: list[StockClient], ai, preset: FormatPreset, out_dir: Path,
                  cache_dir: Path, http: httpx.Client | None = None, subject: str | None = None,
-                 judge: Judge | None = None, vision=None):
+                 judge: Judge | None = None, vision=None, ai_bar: int = 0):
         self.clients = clients
         self.ai = ai  # AIGenerator or None when ComfyUI is offline
+        self.ai_bar = ai_bar  # with a generator, stock below this vision score gives way to a drawn shot
         self.orientation = preset.orientation
         self.ai_video_budget = preset.max_ai_video
         self.visuals_dir = out_dir / "visuals"
@@ -231,9 +232,16 @@ class Selector:
             steps.append(lambda: self._ai(scene, video=True))
         if scene.visual_type in ("ai_video", "ai_image"):
             steps.append(lambda: self._ai(scene, video=False))
+        # quality gate: a generator can draw the exact shot, so a merely generic clip (vision 5-6) waits
+        # until drawing has failed; scores from the first pass are reused, no second look is spent
+        gate = scene.visual_type == "stock" and self.ai is not None and self.ai_bar > MIN_VISION
+        if gate:
+            steps += [lambda: self._stock(scene, seconds, "video", bar=self.ai_bar),
+                      lambda: self._stock(scene, seconds, "image", bar=self.ai_bar),
+                      lambda: self._ai(scene, video=False)]
         steps += [lambda: self._stock(scene, seconds, "video"),
                   lambda: self._stock(scene, seconds, "image")]
-        if scene.visual_type == "stock":
+        if scene.visual_type == "stock" and not gate:
             steps.append(lambda: self._ai(scene, video=False))
         # nothing good anywhere: a clip the judge found loosely related, then the closest stock clip by
         # name — both still beat a flat colour
@@ -264,7 +272,7 @@ class Selector:
                      source="wan" if video else "flux", license="AI-generated")
 
     def _stock(self, scene: Scene, seconds: float, kind: str, query_text: str | None = None,
-               strict: bool = True) -> Asset | None:
+               strict: bool = True, bar: int = MIN_VISION) -> Asset | None:
         """Search stock for the scene. Ranking: relevance to the scene query first, technical fit second.
         strict: skip clips whose description doesn't match (a fallback query or the next step may do
         better); non-strict is the last resort before a placeholder."""
@@ -316,7 +324,7 @@ class Selector:
             if seen is not None:
                 judged = True  # the vision model has looked at them: no text tie-breaker needed
                 raw, adjusted = seen
-                good = sorted((c for c in ranked if adjusted.get(c.uid, -1) >= MIN_VISION),
+                good = sorted((c for c in ranked if adjusted.get(c.uid, -1) >= bar),
                               key=lambda c: -adjusted[c.uid])
                 # hopeless clips stay out for the rest of this scene, in every step
                 self.vision_rejected |= {uid for uid, a in adjusted.items() if a < MIN_FALLBACK}
@@ -330,7 +338,7 @@ class Selector:
                     good = [best_low]
                 # clips the model scored low are neither used nor offered as swaps; a second shot comes
                 # only from clips it passed (not from ones it never saw)
-                extra_from = [c for c in good if adjusted[c.uid] >= MIN_VISION]
+                extra_from = [c for c in good if adjusted[c.uid] >= bar]
                 ranked = good + [c for c in ranked if c.uid not in adjusted]
             # weak match (the best clip misses several query words, e.g. "man eating pizza at his computer
             # screen" for "computer screen showing malware"): let the LLM read the narration and choose
@@ -540,7 +548,8 @@ def build_selector(script: Script, preset: FormatPreset, out_dir: Path, s: Setti
     log.info("video subject for clip matching: %s", subject)
     # the text judge stays as a backup: it only runs in a round the vision judge had no opinion on
     # (model not pulled, Ollama errors), so a missing vision model never makes picking worse
-    return Selector(clients, ai, preset, out_dir, cache, subject=subject, judge=llm_judge(s), vision=vision_judge(s))
+    return Selector(clients, ai, preset, out_dir, cache, subject=subject, judge=llm_judge(s), vision=vision_judge(s),
+                    ai_bar=s.pipeline.vision.ai_bar)
 
 
 def vision_judge(s: Settings):

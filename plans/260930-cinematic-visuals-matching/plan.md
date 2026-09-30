@@ -3,7 +3,7 @@ title: Cinematic visuals & content matching
 description: >-
   DP-style visual prompts and metaphors, a vision quality gate with AI fallback,
   a $0 AI image source, unified grading looks
-status: in-progress
+status: pending
 priority: P1
 branch: main
 tags:
@@ -30,7 +30,7 @@ own phase, chosen later; the quality gate only raises the bar when a generator i
 | Phase | Name | Status |
 |-------|------|--------|
 | 1 | [DP prompting engine](./phase-01-dp-prompting-engine.md) | Completed |
-| 2 | [Quality-gated selection](./phase-02-quality-gated-selection.md) | In progress |
+| 2 | [Quality-gated selection](./phase-02-quality-gated-selection.md) | Completed |
 | 3 | [Zero-cost AI image source](./phase-03-zero-cost-ai-image-source.md) | Pending (source to choose) |
 | 4 | [Unified aesthetic grading](./phase-04-unified-aesthetic-grading.md) | Pending |
 

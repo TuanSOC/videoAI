@@ -37,6 +37,7 @@ llm:
 vision:
   enabled: true
   model: qwen2.5vl:7b
+  ai_bar: 7   # with an AI image generator: stock below this is replaced by a drawn shot (0 = off)
 
 # automatic sound effects (whoosh at dissolves, impact on the hook/shock words, pop on numbers);
 # sounds are synthesised into assets/sfx/ — drop your own files there to replace them

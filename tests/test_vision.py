@@ -289,3 +289,59 @@ def test_unload_waits_until_the_model_left_vram(monkeypatch):
 def test_extra_scores_for_one_image_are_trimmed():
     judge = vision.VisionJudge("http://ollama", "m", http=ollama({"scores": [7, 0, 0]}))
     assert judge.score("n", ["q"], [jpeg()]) == [7]
+
+
+# --- cinematic phase 2: with an AI generator, a stock clip must score ai_bar (7) or the scene is drawn --------
+class DrawAI:
+    def __init__(self, fail=False):
+        self.fail, self.prompts = fail, []
+        self.client = type("C", (), {"free": lambda self: None})()
+
+    def image(self, prompt, out):
+        self.prompts.append(prompt)
+        if self.fail:
+            raise RuntimeError("generator down")
+        p = out.with_suffix(".png")
+        p.write_bytes(b"png")
+        return p
+
+
+def gated(tmp_path, stock, judge, ai, bar=7):
+    s = sel.Selector([stock], ai, get_settings().preset("short"), tmp_path, tmp_path / "cache", vision=judge)
+    s.ai_bar = bar
+    return s
+
+
+NOTE = "Extreme macro of a cracked padlock, dramatic rim light, dark server room, vertical"
+
+
+def gate_scene():
+    return Scene(id=1, narration="n", visual_query="cracked padlock", ai_prompt=NOTE)
+
+
+@pytest.mark.parametrize("score, source", [(6, "flux"), (8, "pexels")])
+def test_a_generic_clip_gives_way_to_the_drawn_shot(tmp_path, fake_io, score, source):
+    stock = FakeStock({"cracked padlock": [tc("clip", "cracked padlock")]})
+    ai = DrawAI()
+    asset = gated(tmp_path, stock, FakeVision({"clip": score}), ai).pick(gate_scene(), 5)
+    assert asset.source == source
+    assert ai.prompts == ([NOTE] if source == "flux" else [])        # drawn from the scene's own shot note
+
+
+def test_the_generic_clip_comes_back_when_drawing_fails_and_vision_is_asked_once(tmp_path, fake_io):
+    stock = FakeStock({"cracked padlock": [tc("clip", "cracked padlock")]})
+    judge = FakeVision({"clip": 6})
+    asset = gated(tmp_path, stock, judge, DrawAI(fail=True)).pick(gate_scene(), 5)
+    assert asset.uid == "clip" and asset.vision_score == 6
+    assert judge.calls == [1]                                        # the second pass reused the score
+
+
+def test_without_a_generator_or_with_the_bar_off_nothing_changes(tmp_path, fake_io):
+    for ai, bar in ((None, 7), (DrawAI(), 0)):
+        stock = FakeStock({"cracked padlock": [tc("clip", "cracked padlock")]})
+        asset = gated(tmp_path, stock, FakeVision({"clip": 6}), ai, bar).pick(gate_scene(), 5)
+        assert asset.uid == "clip"
+
+
+def test_the_bar_is_in_config():
+    assert get_settings().pipeline.vision.ai_bar == 7

@@ -67,6 +67,9 @@ class VisionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")  # a typo in config.yaml is an error, not ignored
     enabled: bool = True           # score stock thumbnails with a local vision model before picking
     model: str = "qwen2.5vl:7b"    # "qwen2.5vl:3b" is faster and lighter, less accurate
+    # with an AI image generator available, a stock clip must score this (0-10) or the scene is drawn from its
+    # shot note instead; a lower clip comes back only if drawing fails. 0 = off. No generator: no effect.
+    ai_bar: int = 7
 
 
 class SfxConfig(BaseModel):

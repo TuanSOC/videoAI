@@ -1,10 +1,11 @@
 ---
 phase: 2
-title: "Quality-gated selection"
-status: in-progress
+title: Quality-gated selection
+status: completed
 priority: P1
-effort: "0.5d"
-dependencies: [1]
+effort: 0.5d
+dependencies:
+  - 1
 ---
 
 # Phase 2: Quality-gated selection
@@ -24,3 +25,9 @@ its ai_prompt; only if AI fails does a 5-6 clip come back. Without a generator n
 
 ## Success Criteria
 - [ ] Unit tests above; suite green. Live check waits for phase 3 (no generator on this machine).
+
+## Results (2026-09-30)
+- `vision.ai_bar` (7) in config; `Selector(ai_bar=…)`; stock scenes with a generator: stock ≥ bar → AI image from
+  the scene's shot note → stock ≥ 5 → weak → placeholder. Judged scores reused (one vision call in the test).
+- Tests: 6 → drawn, 8 → stock, drawing fails → the 6 clip back, no generator / bar 0 → unchanged. 396 green.
+- Not yet live: this machine has no generator (ComfyUI absent, Pollinations paywalled) — phase 3.
