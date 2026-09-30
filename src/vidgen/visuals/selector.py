@@ -191,6 +191,11 @@ class Selector:
         self.clients = clients
         self.ai = ai  # AIGenerator or None when ComfyUI is offline
         self.ai_bar = ai_bar  # with a generator, stock below this vision score gives way to a drawn shot
+        # defer_ai: during the picking loop only note which scenes want a drawing (the stock fallback is still
+        # picked); draw_deferred draws them after the vision model is unloaded — Ollama's VL model and Flux in
+        # ComfyUI don't both fit in 8 GB of VRAM
+        self.defer_ai = False
+        self.deferred: dict[int, tuple[Scene, bool]] = {}
         self.orientation = preset.orientation
         self.ai_video_budget = preset.max_ai_video
         self.visuals_dir = out_dir / "visuals"
@@ -258,6 +263,9 @@ class Selector:
 
     def _ai(self, scene: Scene, video: bool) -> Asset | None:
         if self.ai is None:
+            return None
+        if self.defer_ai:
+            self.deferred.setdefault(scene.id, (scene, video))   # the first request (video before image) wins
             return None
         prompt = scene.ai_prompt or default_ai_prompt(scene.visual_query)
         out = self.visuals_dir / f"scene_{scene.id:03d}"
@@ -455,6 +463,22 @@ class Selector:
 
     def _fetch(self, url: str, dest: Path) -> None:
         _link_or_copy(download(url, self.cache_dir, self.http), dest)
+
+    def draw_deferred(self, assets: list[Asset]) -> list[Asset]:
+        """Draw the scenes noted while picking; a scene whose drawing fails keeps its stock fallback."""
+        self.defer_ai = False
+        out = list(assets)
+        for i, asset in enumerate(out):
+            request = self.deferred.pop(asset.scene_id, None)
+            if request is None:
+                continue
+            scene, video = request
+            drawn = self._ai(scene, video=True) if video and self.ai_video_budget > 0 else None
+            drawn = drawn or self._ai(scene, video=False)
+            if drawn is not None:
+                log.info("scene %d: drawn by %s instead of %s", scene.id, drawn.source, asset.source)
+                out[i] = drawn
+        return out
 
     def finish(self, assets: list[Asset]) -> list[Asset]:
         """Wait for background downloads; a failed one falls back to that scene's alternates
@@ -656,11 +680,13 @@ def source_visuals(script: Script, timeline: Timeline, preset: FormatPreset, out
         if sources and s.pipeline.documents.enabled else {}
     try:
         # choose sequentially (cheap, cached searches; keeps clips unique), download in parallel
+        selector.defer_ai = selector.ai is not None   # draw after the vision model has left the GPU
         with vision_session(selector, s), ThreadPoolExecutor(DOWNLOAD_WORKERS) as pool:
             selector.pool = pool
             assets = [docs.get(scene.id) or selector.pick(scene, seconds.get(scene.id, 5.0))
                       for scene in script.scenes]
-            return selector.finish(assets)
+            assets = selector.finish(assets)
+        return selector.draw_deferred(assets)
     finally:
         selector.pool = None
         if selector.ai is not None:

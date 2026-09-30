@@ -105,6 +105,9 @@ def test_visuals_stage_builds_documents_and_skips_stock_for_them(tmp_path, monke
         def finish(self, assets):
             return assets
 
+        def draw_deferred(self, assets):
+            return assets
+
     monkeypatch.setattr(doc, "make_clip", lambda q, size, seconds, out: out)
     s = script("Hook.", "Năm 2021 có 150.000 camera bị truy cập.", "Kết?")
     tl = Timeline(scenes=[SceneAudio(scene_id=i, path="", start=i, duration=3, words=[]) for i in (1, 2, 3)])

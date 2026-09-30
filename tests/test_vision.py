@@ -345,3 +345,32 @@ def test_without_a_generator_or_with_the_bar_off_nothing_changes(tmp_path, fake_
 
 def test_the_bar_is_in_config():
     assert get_settings().pipeline.vision.ai_bar == 7
+
+
+# --- drawing after the picking loop: the vision model (Ollama) and Flux (ComfyUI) never share 8 GB of VRAM ----
+def test_deferred_drawing_keeps_the_fallback_until_the_shot_is_drawn(tmp_path, fake_io):
+    stock = FakeStock({"cracked padlock": [tc("clip", "cracked padlock")]})
+    ai = DrawAI()
+    s = gated(tmp_path, stock, FakeVision({"clip": 6}), ai)
+    s.defer_ai = True
+    picked = s.pick(gate_scene(), 5)
+    assert picked.uid == "clip" and ai.prompts == []                 # nothing drawn while the judge is loaded
+    [final] = s.draw_deferred([picked])
+    assert final.source == "flux" and ai.prompts == [NOTE]
+
+
+def test_a_failed_deferred_drawing_keeps_the_stock_fallback(tmp_path, fake_io):
+    stock = FakeStock({"cracked padlock": [tc("clip", "cracked padlock")]})
+    s = gated(tmp_path, stock, FakeVision({"clip": 6}), DrawAI(fail=True))
+    s.defer_ai = True
+    [final] = s.draw_deferred([s.pick(gate_scene(), 5)])
+    assert final.uid == "clip"
+
+
+def test_a_good_clip_is_never_queued_for_drawing(tmp_path, fake_io):
+    stock = FakeStock({"cracked padlock": [tc("clip", "cracked padlock")]})
+    ai = DrawAI()
+    s = gated(tmp_path, stock, FakeVision({"clip": 9}), ai)
+    s.defer_ai = True
+    [final] = s.draw_deferred([s.pick(gate_scene(), 5)])
+    assert final.uid == "clip" and ai.prompts == [] and s.deferred == {}
