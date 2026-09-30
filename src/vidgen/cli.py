@@ -132,6 +132,44 @@ def ui(
 
 
 @app.command()
+def series(
+    file: Path = typer.Argument(..., help="A series frame, e.g. series/cyber-security.yaml"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show the plan and what is due; make nothing."),
+    until: str | None = typer.Option(None, "--until", help="Act as if today were YYYY-MM-DD (make ahead)."),
+    limit: int | None = typer.Option(None, "--limit", min=1, help="Make at most N videos this run."),
+) -> None:
+    """Make every episode of a series that is due (each language), once; resume unfinished ones."""
+    import datetime as dt
+
+    from vidgen import series as sr
+
+    today = dt.date.fromisoformat(until) if until else dt.date.today()
+    frame, state = sr.load(file), sr._read_state(file)
+    table = Table("date", "#", "pillar", "angle", "lang", "status", "topic")
+    for d, e in sr.schedule(frame):
+        for lang in frame.langs:
+            slug = state.get(sr.key(e, lang))
+            status = ("[green]made[/]" if slug and (sr._dir(slug, get_settings()) / "final.mp4").exists()
+                      else "[yellow]unfinished[/]" if slug else "[cyan]due[/]" if d <= today else "planned")
+            table.add_row(d.isoformat(), str(e.id), e.pillar, e.angle, lang, status, e.topic[lang])
+    console.print(table)
+    if dry_run:
+        return
+
+    def report(d, e, lang, out_dir, result) -> None:
+        if "error" in result:
+            console.print(f"[red]✗[/] #{e.id}/{lang} failed (run again to resume): {result['error'][:200]}")
+            return
+        flags = result.get("flags")
+        note = "[green]no fact-check flags[/]" if flags == 0 else f"[yellow]{flags} fact-check flag(s) — review[/]"
+        console.print(f"[green]✓[/] #{e.id}/{lang} → {out_dir / 'final.mp4'}  {note}")
+
+    worked = sr.run(file, get_settings(), today=today, limit=limit, on_video=report)
+    console.print(f"{len(worked)} video(s) made or resumed. Review them in the studio before posting "
+                  f"(nothing is uploaded).")
+
+
+@app.command()
 def version() -> None:
     """Print version."""
     from vidgen import __version__

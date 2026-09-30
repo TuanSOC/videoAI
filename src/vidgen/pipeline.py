@@ -379,6 +379,10 @@ def load_state(out_dir: Path) -> dict:
     return _load_state(out_dir)
 
 
+def save_state(out_dir: Path, state: dict) -> None:
+    _save_state(out_dir, state)
+
+
 def invalidate_stage(out_dir: Path, stage: str) -> None:
     """Remove ONE stage's outputs (unlike invalidate_from, later stages such as metadata survive)."""
     _remove_outputs(out_dir, STAGES[STAGE_NAMES.index(stage)])

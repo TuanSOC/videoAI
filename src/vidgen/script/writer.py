@@ -358,8 +358,11 @@ def ensure_closing_question(scenes: list[Scene], topic: str, lang: str, llm: LLM
     query = out.visual_query.strip()
     if not query or not query.isascii():  # stock search is English-only
         query = CLOSING_VISUAL
-    return [*scenes, scenes[-1].model_copy(update={"narration": q, "visual_query": query, "alt_queries": [],
-                                                   "visual_type": "stock", "ai_prompt": ""})]
+    closing = scenes[-1].model_copy(update={"narration": q, "visual_query": query, "alt_queries": [],
+                                            "visual_type": "stock", "ai_prompt": ""})
+    # a "share this!" ending is replaced, or it would sit mid-script before the question
+    body = scenes[:-1] if hooks.is_comment_cta(scenes[-1].narration) else scenes
+    return [*body, closing]
 
 
 def fix_hook(hook: str, topic: str, lang: str, ctx: dict, llm: LLMChain) -> str:

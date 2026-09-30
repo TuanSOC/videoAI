@@ -198,3 +198,17 @@ def test_closing_question_is_language_sized_and_filmed_on_its_own():
     out = writer.ensure_closing_question(scenes, "Voyager", "vi", LLMChain([Q()]))
     assert out[-1].narration.endswith("không?")                          # 16 syllables: fine in Vietnamese
     assert out[-1].visual_query == "person looking at night sky" and out[-1].alt_queries == []
+
+
+def test_a_closing_share_request_is_replaced_by_the_question_not_left_mid_script():
+    """Seen live: "Hãy chia sẻ câu chuyện này…!" stayed as scene 13 with the question appended as 14."""
+    class Q:
+        name, tier = "groq:x", "strong"
+
+        def generate_json(self, prompt, schema):
+            return json.dumps({"question": "Bạn sẽ làm gì để luôn cập nhật bản vá?", "visual_query": "person updating laptop"})
+    from vidgen.models import Scene
+    scenes = [Scene(id=0, narration=n, visual_query="q") for n in
+              ("Mở đầu.", "Vì sao?", "Vì chưa vá.", "Hãy chia sẻ câu chuyện này nếu bạn thấy hữu ích!")]
+    out = writer.ensure_closing_question(scenes, "WannaCry", "vi", LLMChain([Q()]))
+    assert [s.narration for s in out] == ["Mở đầu.", "Vì sao?", "Vì chưa vá.", "Bạn sẽ làm gì để luôn cập nhật bản vá?"]

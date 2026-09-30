@@ -13,3 +13,4 @@ assets/music/**/*.flac
 .codegraph/
 assets/sfx/**/synth_*.wav
 assets/sfx/**/synth2_*.wav
+series/*.state.json

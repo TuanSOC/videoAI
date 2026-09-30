@@ -1,0 +1,97 @@
+# Cyber security series — 3 shorts a week (Mon attacks, Wed scams, Fri self-defence), Vietnamese + English.
+# Make what is due:   vidgen series series/cyber-security.yaml          (add --dry-run to just see the plan)
+# Each episode: the topic per language, its pillar, and which brief angle to write (explain | myth | story).
+# Dates: episode k takes the k-th Mon/Wed/Fri slot from `start`; give an episode `date: YYYY-MM-DD` to pin it.
+# Topics are well-documented cases on purpose: the script is grounded in Wikipedia and fact-checked.
+
+name: cyber-security
+start: 2026-10-05
+weekdays: [mon, wed, fri]
+format: short
+langs: [vi, en]
+
+pillars:
+  attacks: "Tấn công nổi tiếng — một vụ có thật, kể như một câu chuyện: chuyện gì xảy ra, vì sao, bài học"
+  scams: "Chiêu lừa — cách kẻ gian lừa người thường, dấu hiệu nhận biết"
+  defence: "Tự bảo vệ — một thói quen cụ thể, gỡ một hiểu lầm phổ biến"
+
+episodes:
+  # --- week 1 ---
+  - id: 1
+    pillar: attacks
+    angle: story
+    topic:
+      vi: "WannaCry 2017: vì sao một lỗ hổng đã có bản vá vẫn làm tê liệt bệnh viện Anh?"
+      en: "WannaCry 2017: how a patched Windows flaw still shut down UK hospitals"
+  - id: 2
+    pillar: scams
+    angle: explain
+    topic:
+      vi: "Phishing: vì sao một email giả mạo vẫn lừa được cả người cẩn thận?"
+      en: "Phishing: why a fake email still fools careful people"
+  - id: 3
+    pillar: defence
+    angle: myth
+    topic:
+      vi: "Mật khẩu dài hay mật khẩu phức tạp: cái nào thật sự khó bẻ hơn?"
+      en: "Long or complex passwords: which one is actually harder to crack?"
+
+  # --- week 2 ---
+  - id: 4
+    pillar: attacks
+    angle: story
+    topic:
+      vi: "Stuxnet: con sâu máy tính đầu tiên phá hỏng máy móc ngoài đời thật"
+      en: "Stuxnet: the computer worm that broke real-world machines"
+  - id: 5
+    pillar: scams
+    angle: explain
+    topic:
+      vi: "Chiếm đoạt SIM: kẻ gian lấy số điện thoại của bạn bằng cách nào?"
+      en: "SIM swap scams: how criminals take over your phone number"
+  - id: 6
+    pillar: defence
+    angle: myth
+    topic:
+      vi: "Wi-Fi quán cà phê: mạng 'evil twin' giả mạo hoạt động ra sao?"
+      en: "Café Wi-Fi: how an 'evil twin' hotspot tricks your phone"
+
+  # --- week 3 ---
+  - id: 7
+    pillar: attacks
+    angle: story
+    topic:
+      vi: "Mirai: khi camera và router tại gia bị biến thành đội quân đánh sập Internet"
+      en: "Mirai: when home cameras and routers became an army that broke the internet"
+  - id: 8
+    pillar: scams
+    angle: story
+    topic:
+      vi: "Deepfake lừa đảo: giọng nói và khuôn mặt giả đã lừa người ta chuyển tiền thế nào?"
+      en: "Deepfake scams: how fake voices and faces talk people into sending money"
+  - id: 9
+    pillar: defence
+    angle: explain
+    topic:
+      vi: "Lỗ hổng zero-day: vì sao cập nhật phần mềm ngay là thói quen quan trọng nhất?"
+      en: "Zero-day flaws: why updating right away is the habit that matters most"
+
+  # --- week 4 ---
+  - id: 10
+    pillar: attacks
+    angle: story
+    topic:
+      vi: "Colonial Pipeline 2021: một mật khẩu bị lộ đã làm thiếu xăng cả bờ Đông nước Mỹ"
+      en: "Colonial Pipeline 2021: how one leaked password caused fuel shortages across the US East Coast"
+  - id: 11
+    pillar: scams
+    angle: story
+    topic:
+      vi: "Kevin Mitnick: hacker lừa người chứ không lừa máy — kỹ thuật xã hội là gì?"
+      en: "Kevin Mitnick: the hacker who fooled people, not machines — what is social engineering?"
+  - id: 12
+    pillar: defence
+    angle: explain
+    topic:
+      vi: "Rò rỉ dữ liệu Equifax: làm gì khi thông tin của bạn nằm trong vụ lộ dữ liệu?"
+      en: "The Equifax breach: what to do when your data is in a leak"

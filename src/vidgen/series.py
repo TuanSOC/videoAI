@@ -1,0 +1,168 @@
+"""A series: a YAML frame of episodes on a weekly rhythm (series/*.yaml), made as they fall due.
+
+Each episode has a topic per language, a pillar (the series' recurring themes) and the brief angle to write
+(explain / myth / story). Dates come from `start` and `weekdays` — episode k takes the k-th slot — unless an
+episode pins its own `date`. `vidgen series FILE` makes every (episode, language) due by today and not made
+yet: brief → the episode's angle → script → voice → visuals → video. It records the video folder in
+<file>.state.json the moment it exists, so a run never makes one twice and an interrupted one is resumed.
+Nothing is published: fact-check flags are listed for review before posting.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import datetime as dt
+from datetime import timedelta
+from pathlib import Path
+from typing import Literal
+
+import yaml
+from pydantic import BaseModel, ConfigDict, model_validator
+
+from vidgen.config import Settings
+from vidgen.fsutil import write_atomic
+from vidgen.models import Brief
+
+log = logging.getLogger(__name__)
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+class Episode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: int
+    pillar: str
+    angle: Literal["explain", "myth", "story"]
+    topic: dict[str, str]          # language → topic
+    date: dt.date | None = None    # pinned date; otherwise the next weekly slot
+
+
+class Series(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    start: dt.date
+    weekdays: list[Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]]
+    format: Literal["short", "long"] = "short"
+    langs: list[Literal["vi", "en"]]
+    pillars: dict[str, str] = {}   # pillar → what it covers (documentation for whoever extends the frame)
+    episodes: list[Episode]
+
+    @model_validator(mode="after")
+    def _complete(self) -> Series:
+        ids = [e.id for e in self.episodes]
+        if len(ids) != len(set(ids)):
+            raise ValueError("episode ids must be unique")
+        for e in self.episodes:
+            missing = [lang for lang in self.langs if not e.topic.get(lang, "").strip()]
+            if missing:
+                raise ValueError(f"episode {e.id}: no topic for {', '.join(missing)}")
+        if not self.weekdays:
+            raise ValueError("weekdays must not be empty")
+        return self
+
+
+def load(path: Path) -> Series:
+    return Series.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
+
+
+def schedule(s: Series) -> list[tuple[dt.date, Episode]]:
+    """(date, episode) in frame order; unpinned episodes take the weekly slots from `start` in turn."""
+    days = {WEEKDAYS.index(d) for d in s.weekdays}
+    slot = s.start - timedelta(days=1)
+    out = []
+    for e in s.episodes:
+        if e.date is not None:
+            out.append((e.date, e))
+            continue
+        slot += timedelta(days=1)
+        while slot.weekday() not in days:
+            slot += timedelta(days=1)
+        out.append((slot, e))
+    return out
+
+
+def key(e: Episode, lang: str) -> str:
+    return f"{e.id}/{lang}"
+
+
+def due(s: Series, today: dt.date, state: dict[str, str]) -> list[tuple[dt.date, Episode, str]]:
+    """Every (date, episode, language) scheduled by `today` and not made yet."""
+    return [(d, e, lang) for d, e in schedule(s) if d <= today for lang in s.langs if key(e, lang) not in state]
+
+
+def angle_index(brief: Brief, style: str) -> int:
+    """The brief angle with this style (the first angle if the model didn't write one)."""
+    return next((i for i, a in enumerate(brief.angles) if a.style == style), 0)
+
+
+def state_path(path: Path) -> Path:
+    return path.with_name(f"{path.stem}.state.json")
+
+
+def _read_state(path: Path) -> dict[str, str]:
+    p = state_path(path)
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+# --- the pipeline steps (patched out in tests) ---------------------------------------------------------------
+def _dir(slug: str, settings: Settings) -> Path:
+    from vidgen.pipeline import resolve_output_dir
+
+    return resolve_output_dir(slug, settings)
+
+
+def _create(e: Episode, lang: str, s: Series, fmt: str, settings: Settings) -> Path:
+    from vidgen import pipeline
+
+    out_dir = pipeline.init_video(e.topic[lang], fmt, lang, settings)
+    state = pipeline.load_state(out_dir)
+    state["series"] = {"name": s.name, "episode": e.id, "angle": e.angle}   # _finish writes this angle
+    pipeline.save_state(out_dir, state)
+    return out_dir
+
+
+def _finish(out_dir: Path, settings: Settings) -> dict:
+    """Brief (if missing) → the recorded angle → script (if missing) → every remaining stage."""
+    from vidgen import pipeline
+
+    if pipeline.load_brief(out_dir) is None:
+        pipeline.write_brief(out_dir, settings)
+    if not (out_dir / "script.json").exists():
+        brief = pipeline.load_brief(out_dir)
+        style = pipeline.load_state(out_dir).get("series", {}).get("angle", "explain")
+        pipeline.choose_angle(out_dir, angle_index(brief, style))
+        pipeline.write_script(out_dir, settings)
+    pipeline.run_stages(out_dir, settings)
+    fc = out_dir / "factcheck.json"
+    return {"flags": len(json.loads(fc.read_text(encoding="utf-8")).get("issues", [])) if fc.exists() else None}
+
+
+def run(path: Path, settings: Settings | None, today: dt.date | None = None, limit: int | None = None,
+        on_video=lambda d, e, lang, out_dir, result: None) -> list[Path]:
+    """Make (or resume) every video due by `today`. Returns the folders worked on."""
+    s, today = load(path), today or dt.date.today()
+    state = _read_state(path)
+    worked: list[Path] = []
+    for d, e in schedule(s):
+        if d > today:
+            continue
+        for lang in s.langs:
+            if limit is not None and len(worked) >= limit:
+                return worked
+            slug = state.get(key(e, lang))
+            if slug is not None and (_dir(slug, settings) / "final.mp4").exists():
+                continue
+            if slug is None:
+                out_dir = _create(e, lang, s, s.format, settings)
+                state[key(e, lang)] = out_dir.name
+                write_atomic(state_path(path), json.dumps(state, ensure_ascii=False, indent=2))
+            else:
+                out_dir = _dir(slug, settings)
+            try:
+                result = _finish(out_dir, settings)
+            except Exception as e_:  # one failed video must not stop the rest; it resumes next run
+                log.error("series %s episode %s/%s failed: %s", s.name, e.id, lang, e_)
+                result = {"error": str(e_)}
+            worked.append(out_dir)
+            on_video(d, e, lang, out_dir, result)
+    return worked
