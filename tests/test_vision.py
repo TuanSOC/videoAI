@@ -374,3 +374,26 @@ def test_a_good_clip_is_never_queued_for_drawing(tmp_path, fake_io):
     s.defer_ai = True
     [final] = s.draw_deferred([s.pick(gate_scene(), 5)])
     assert final.uid == "clip" and ai.prompts == [] and s.deferred == {}
+
+
+def test_comfyui_lets_go_of_the_gpu_before_the_vision_model_loads(tmp_path, fake_io, monkeypatch):
+    """Seen live: Flux (6.3 GB) still loaded in ComfyUI pushed the vision model onto the CPU; sourcing 524 s."""
+    events = []
+
+    class Client:
+        def free(self):
+            events.append("comfy freed")
+
+    class Judge(FakeVision):
+        used = False
+
+        def score(self, narration, queries, images):
+            events.append("vision scores")
+            return super().score(narration, queries, images)
+    ai = DrawAI()
+    ai.client = Client()
+    monkeypatch.setattr(vision, "unload", lambda *a, **k: events.append("vision unloaded"))
+    s = gated(tmp_path, FakeStock({"cracked padlock": [tc("clip", "cracked padlock")]}), Judge({"clip": 9}), ai)
+    with sel.vision_session(s, get_settings()):
+        s.pick(gate_scene(), 5)
+    assert events[:2] == ["comfy freed", "vision scores"]

@@ -604,6 +604,10 @@ def vision_session(selector: Selector, s: Settings):
         if getattr(selector, "vision", None) is None:
             yield
             return
+        # Flux left loaded in ComfyUI (6.3 GB) pushed the vision model onto the CPU (sourcing took 524 s):
+        # drawing happens after this session (draw_deferred), so ComfyUI can let go of the GPU now
+        if getattr(selector, "ai", None) is not None:
+            selector.ai.client.free()
         with _VISION_LOCK:
             _vision_users += 1
         try:
