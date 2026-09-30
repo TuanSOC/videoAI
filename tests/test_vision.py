@@ -407,6 +407,10 @@ def test_comfyui_lets_go_of_the_gpu_before_the_vision_model_loads(tmp_path, fake
     ("Extreme macro of a human eye reflecting glowing green code, neon rim light", True),
     ("Aerial drone of a stormy sea, vertical 9:16, photorealistic, no text, no logos, without signs", True),
     ("Low angle of rock forms in a canyon at golden hour", True),
+    ("Close-up of a printed warning notice about account closure, harsh side lighting", False),   # seen live
+    ("Wide shot of a login page that mirrors a legitimate site in a browser window", False),
+    ("Macro of a handwritten note on a crumpled receipt", False),
+    ("Extreme macro of a glowing padlock over circuit patterns, red rim light", True),              # seen live, fine
 ])
 def test_shots_whose_subject_is_text_are_not_drawn(tmp_path, fake_io, note, drawn):
     """Seen live: Flux drew 'FARE EANK' banks and 'Ustcrents Alert' pop-ups — gibberish text reads as cheap AI."""

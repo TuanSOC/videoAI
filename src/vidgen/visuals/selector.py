@@ -38,7 +38,9 @@ VISION_TOP = 5     # thumbnails shown to the vision judge per search round
 TEXT_SUBJECT = re.compile(
     r"\b(?:screens?|monitors?|displays?|displaying|inbox|e-?mails?|websites?|web ?pages?|documents?|letters?|"
     r"newspapers?|headlines?|signs?|signage|posters?|captions?|pop-?ups?|notifications?|messages?|chats?|"
-    r"comment (?:box|section)|interfaces?|dashboards?|spreadsheets?|texts?|logos?|menus?)\b", re.I)
+    r"comment (?:box|section)|interfaces?|dashboards?|spreadsheets?|texts?|logos?|menus?|notices?|pages?|"
+    r"browser windows?|labels?|receipts?|tickets?|flyers?|leaflets?|brochures?|books?|printed|handwritten|writing|"
+    r"words?|typed|typing on)\b", re.I)
 # "..., no text, no logos" is the shot note asking for the opposite: not a text subject
 NO_TEXT = re.compile(r"\b(?:no|without|free of)\s+(?:any\s+)?(?:text|logos?|signs?|letters?|writing|captions?)"
                      r"(?:\s*(?:,|or|and)\s*(?:no\s+)?(?:text|logos?|signs?|letters?|writing|captions?))*", re.I)
