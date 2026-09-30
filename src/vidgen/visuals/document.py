@@ -34,6 +34,9 @@ MAX_QUOTE_WORDS = 40
 PHRASE_WORDS = 3                  # the figure and the words right after it ("150.000 camera an")
 FPS = 30
 LEAD, SWEEP = 0.4, 0.6            # seconds before the highlighter starts, and its sweep
+# then the card slowly pushes in (eased) instead of holding one frame: a 6.6 s card held still read as a
+# stuck video (seen live). Anchored on the source line, so nothing moves down into the captions.
+PUSH = 0.04
 PAPER, INK, MUTED = (243, 238, 227), (30, 30, 30), (125, 112, 95)
 MARK = (255, 212, 0, 150)         # highlighter yellow, ~60 % opaque
 LABEL = {"vi": ("TRÍCH TỪ NGUỒN", "Nguồn"), "en": ("FROM THE SOURCE", "Source")}
@@ -277,7 +280,7 @@ def frame(quote: Quote, lay: Layout, paper: Image.Image, progress: float) -> Ima
 
 
 def make_clip(quote: Quote, size: tuple[int, int], seconds: float, out: Path) -> Path:
-    """An mp4 `seconds` long: the card, the highlighter sweeping in after LEAD, then held."""
+    """An mp4 `seconds` long: the card, the highlighter sweeping in after LEAD, and a slow push-in."""
     lay = layout(quote, size)
     paper = _paper(size)
     lead, sweep = round(LEAD * FPS), round(SWEEP * FPS)
@@ -287,7 +290,13 @@ def make_clip(quote: Quote, size: tuple[int, int], seconds: float, out: Path) ->
         for k, p in enumerate(frames):
             frame(quote, lay, paper, p).save(Path(tmp) / f"f{k:04d}.png")
         hold = max(0.0, seconds - len(frames) / FPS)
+        w, h = size
+        total = max(1, round(seconds * FPS))
+        zoom = f"1+{PUSH}*((1-cos(PI*min(1,on/{total})))/2)"
+        # zoompan works on a 2x frame: at 1x its whole-pixel crop makes a slow zoom wobble
+        push = (f"scale={2 * w}:{2 * h},zoompan=z='{zoom}':x='iw/2-iw/2/zoom'"
+                f":y='{2 * lay.source_y}-{2 * lay.source_y}/zoom':d=1:s={w}x{h}:fps={FPS}")
         ffmpeg.run(["-framerate", str(FPS), "-i", str(Path(tmp) / "f%04d.png"),
-                    "-vf", f"tpad=stop_mode=clone:stop_duration={hold:.3f},format=yuv420p",
+                    "-vf", f"tpad=stop_mode=clone:stop_duration={hold:.3f},{push},format=yuv420p",
                     "-t", f"{seconds:.3f}", "-r", str(FPS), *ffmpeg.video_encoder(), str(out)])
     return out

@@ -181,3 +181,23 @@ def test_the_highlight_does_not_end_on_a_little_word():
 def test_a_sentence_ending_in_initials_still_ends(text, first):
     q = doc.find_quote("Năm 1977 có điều mới.", [Source(title="S", url="u", lang="en", text=text)], "vi")
     assert q.text == first
+
+
+@needs_ffmpeg
+def test_card_keeps_moving_after_the_sweep_and_the_source_line_stays_put(tmp_path):
+    """Seen live: a 6.6 s card held one frame for 5.5 s and read as a stuck video."""
+    import cv2
+    import numpy as np
+    q = doc.find_quote("150.000 camera an ninh bị lộ.", [SRC_VI], "vi")
+    out = doc.make_clip(q, (540, 960), 4.0, tmp_path / "doc.mp4")
+    cap = cv2.VideoCapture(str(out))
+
+    def gray(t):
+        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+        ok, frame = cap.read()
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    held_a, held_b = gray(1.6), gray(3.8)
+    assert np.abs(held_a - held_b).mean() > 1.0            # still moving well after the sweep
+    y = doc.layout(q, (540, 960)).source_y
+    rows = lambda g: g[y - 4:y + 30].mean(axis=1)         # the source line's rows barely move
+    assert np.abs(rows(held_a) - rows(held_b)).mean() < 12
