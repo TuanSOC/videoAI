@@ -244,6 +244,16 @@ def rewrite_one(script: Script, scene: Scene, prev: str, nxt: str, instruction: 
     return out.model_copy(update={"alt_queries": clean_alt_queries(out.visual_query, out.alt_queries)})
 
 
+# seen live: asked for a visual metaphor, the model wrote the word itself ("broken shield metaphor") — useless
+# in a stock search box
+META_WORDS = re.compile(r"\b(?:visual\s+)?metaphor(?:ical)?(?:\s+of)?\b|\b(?:symbolic|abstract|conceptual|concept)\b",
+                        re.I)
+
+
+def strip_meta(query: str) -> str:
+    return " ".join(META_WORDS.sub(" ", query).split())
+
+
 def clean_alt_queries(main: str, alts: list[str]) -> list[str]:
     """English only (stock search), different from the main query and each other, at most MAX_ALT_QUERIES."""
     seen = {main.strip().casefold()}
@@ -327,7 +337,7 @@ def _open_loop_structure(scenes: list[Scene], open_loop: str, angle: Angle | Non
     scenes = [sc for i, sc in enumerate(scenes)
               if i in (0, len(scenes) - 1) or not hooks.is_comment_cta(sc.narration)]
     if angle is not None and hooks.hook_problem(angle.hook) is None:
-        stock = {"narration": angle.hook, "visual_type": "stock", "ai_prompt": ""}
+        stock = {"narration": angle.hook, "visual_type": "stock"}   # filmed like the scene it copies
         if _similar(scenes[0].narration, angle.hook):
             scenes[0] = scenes[0].model_copy(update=stock)  # a paraphrase: say the chosen hook instead
         elif not any(_similar(s.narration, angle.hook, 0.9) for s in scenes[:2]):
@@ -335,7 +345,7 @@ def _open_loop_structure(scenes: list[Scene], open_loop: str, angle: Angle | Non
     question = open_loop.strip()
     if (question and len(scenes) > 1 and not ends_with(scenes[1].narration, ("?",))
             and bare(question) not in {bare(s.narration) for s in scenes}):
-        scenes.insert(1, scenes[1].model_copy(update={"narration": question, "visual_type": "stock", "ai_prompt": ""}))
+        scenes.insert(1, scenes[1].model_copy(update={"narration": question, "visual_type": "stock"}))
     return scenes
 
 
@@ -359,7 +369,7 @@ def ensure_closing_question(scenes: list[Scene], topic: str, lang: str, llm: LLM
     if not query or not query.isascii():  # stock search is English-only
         query = CLOSING_VISUAL
     closing = scenes[-1].model_copy(update={"narration": q, "visual_query": query, "alt_queries": [],
-                                            "visual_type": "stock", "ai_prompt": ""})
+                                            "visual_type": "stock", "ai_prompt": default_ai_prompt(query)})
     # a "share this!" ending is replaced, or it would sit mid-script before the question
     body = scenes[:-1] if hooks.is_comment_cta(scenes[-1].narration) else scenes
     return [*body, closing]
@@ -500,13 +510,14 @@ def postprocess(scenes: list[Scene], max_ai_video: int) -> list[Scene]:
             ai_videos += 1
             if ai_videos > max_ai_video:
                 vtype = "ai_image"
-        query, alts = scene.visual_query, clean_alt_queries(scene.visual_query, scene.alt_queries)
+        query = strip_meta(scene.visual_query)
+        alts = clean_alt_queries(query, [strip_meta(a) for a in scene.alt_queries])
         if not query.isascii():  # stock search is English-only (seen live: a Vietnamese query)
             if alts:
                 query, alts = alts[0], alts[1:]
             elif out:
                 query = out[-1].visual_query
-        ai_prompt = scene.ai_prompt
+        ai_prompt = plain(scene.ai_prompt)
         if vtype != "stock" and not ai_prompt:
             ai_prompt = default_ai_prompt(query)
         # typographic hyphens/spaces from hosted models ("14\u20114\u20112017") trip TTS and number matching
@@ -518,6 +529,6 @@ def postprocess(scenes: list[Scene], max_ai_video: int) -> list[Scene]:
                 "narration": part,
                 # only the first split part keeps the AI treatment; the rest use stock
                 "visual_type": vtype if i == 0 else "stock",
-                "ai_prompt": ai_prompt if i == 0 else "",
+                "ai_prompt": ai_prompt,   # the shot note describes the scene, every part of it
             }))
     return out

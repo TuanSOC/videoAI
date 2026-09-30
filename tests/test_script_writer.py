@@ -86,7 +86,8 @@ def test_postprocess_split_parts_after_first_use_stock():
     text = " ".join(["a b c d e f g h i j k l m n o."] * 2)  # 2×15 words > 25
     out = writer.postprocess([Scene(id=0, **scene(text, "ai_image"))], max_ai_video=1)
     assert [s.visual_type for s in out] == ["ai_image", "stock"]
-    assert out[1].ai_prompt == ""
+    # the later part is searched as stock, but keeps the scene's shot note for an AI fallback
+    assert out[1].ai_prompt == out[0].ai_prompt != ""
 
 
 def test_generate_short():

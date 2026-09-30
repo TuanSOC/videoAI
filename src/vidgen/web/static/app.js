@@ -643,7 +643,7 @@ async function aiRewrite(slug, i, btn, lang, job) {
   btn.textContent = "Đang viết…";
   try {
     const before = { narration: scene.narration, visual_query: scene.visual_query,
-                     alt_queries: scene.alt_queries || [] };
+                     alt_queries: scene.alt_queries || [], ai_prompt: scene.ai_prompt || "" };
     const out = await api(`/api/videos/${slug}/scenes/${scene.id}/rewrite`, { method: "POST",
       body: { narration: scene.narration, instruction: instruction || null } });
     // the user may have moved/removed scenes while waiting: follow the scene object, not the index
@@ -653,6 +653,7 @@ async function aiRewrite(slug, i, btn, lang, job) {
     scene.narration = out.narration;
     scene.visual_query = out.visual_query;
     scene.alt_queries = out.alt_queries || [];
+    scene.ai_prompt = out.ai_prompt || "";   // the shot note for an AI image must describe the new text
     aiOpen.delete(now);
     markDirty();
     renderScenes(lang, false, job);
@@ -723,8 +724,8 @@ function wireDetail(slug, v) {
     const f = ev.target.dataset.f;
     if (!card || !f) return;
     draft.scenes[+card.dataset.i][f] = ev.target.value;
-    // hand-typed query: the AI's extra queries described the old idea
-    if (f === "visual_query") draft.scenes[+card.dataset.i].alt_queries = [];
+    // hand-typed query: the AI's extra queries and shot note described the old idea
+    if (f === "visual_query") Object.assign(draft.scenes[+card.dataset.i], { alt_queries: [], ai_prompt: "" });
     markDirty();
     if (f === "narration") {
       const w = words(ev.target.value);
