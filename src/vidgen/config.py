@@ -96,6 +96,10 @@ class AIConfig(BaseModel):
     video_size: dict[str, tuple[int, int]] = {"short": (544, 960), "long": (960, 544)}
     video_frames: int = 81
     timeout_seconds: int = 1800
+    # stills: the first usable source draws (comfyui = local, when it answers; cloudflare = Workers AI free
+    # daily allocation, needs CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN). AI video is ComfyUI only.
+    image_sources: list[Literal["comfyui", "cloudflare"]] = ["comfyui", "cloudflare"]
+    cloudflare_model: str = "@cf/black-forest-labs/flux-2-klein-4b"   # 9:16 frames; flux-1-schnell = square
 
 
 class PipelineConfig(BaseModel):
@@ -120,6 +124,8 @@ class Secrets(BaseSettings):
 
     gemini_api_key: str = ""
     groq_api_key: str = ""
+    cloudflare_account_id: str = ""
+    cloudflare_api_token: str = ""
     pexels_api_key: str = ""
     pixabay_api_key: str = ""
     comfyui_url: str = "http://127.0.0.1:8188"
@@ -137,7 +143,8 @@ class Settings(BaseModel):
         return p if p.is_absolute() else ROOT / p
 
 
-SECRET_KEYS = ("GEMINI_API_KEY", "PEXELS_API_KEY", "PIXABAY_API_KEY", "COMFYUI_URL", "OLLAMA_URL")
+SECRET_KEYS = ("GEMINI_API_KEY", "PEXELS_API_KEY", "PIXABAY_API_KEY", "COMFYUI_URL", "OLLAMA_URL",
+               "GROQ_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN")
 
 
 def update_env_file(values: dict[str, str], env_file: Path = ROOT / ".env") -> None:

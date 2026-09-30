@@ -10,6 +10,8 @@ from vidgen.models import Asset, Script
 from vidgen.script.llm import LLMChain
 from vidgen.config import LANG_NAMES
 
+AI_SOURCES = ("flux", "wan", "cloudflare")   # generators (visuals/ai.py); also any asset licensed AI-generated
+
 DISCLOSURE = {
     "vi": "Video sử dụng giọng đọc AI; một số hình ảnh minh họa được tạo bằng AI.",
     "en": "This video uses an AI voice; some illustrative visuals are AI-generated.",
@@ -97,7 +99,7 @@ def _compose(title: str, summary: str, tags: list[str], hashtags: list[str], scr
     description += "\n\n" + " ".join(hashtags)
     return Metadata(title=title, description=description, tags=tags, hashtags=hashtags, credits=credits,
                     ai_disclosure=disclosure, summary=summary,
-                    ai_visuals_used=any(a.source in ("flux", "wan") for a in assets))
+                    ai_visuals_used=any(a.license == "AI-generated" or a.source in AI_SOURCES for a in assets))
 
 
 def rebuild_description(meta: Metadata, script: Script, assets: list[Asset], music_credit: str = "") -> Metadata:

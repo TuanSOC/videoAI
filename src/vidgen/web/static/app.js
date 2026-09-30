@@ -866,6 +866,10 @@ const KEY_INFO = {
   PIXABAY_API_KEY: ["Pixabay API key", "Stock dự phòng (free)", "https://pixabay.com/api/docs/"],
   COMFYUI_URL: ["ComfyUI URL", "Ảnh/video AI local (tùy chọn)", ""],
   OLLAMA_URL: ["Ollama URL", "LLM local dự phòng (tùy chọn)", ""],
+  GROQ_API_KEY: ["Groq API key", "Viết kịch bản + kiểm tra dữ kiện (free tier)", "https://console.groq.com/keys"],
+  CLOUDFLARE_ACCOUNT_ID: ["Cloudflare account ID", "Ảnh AI trên cloud khi ComfyUI tắt (free ~100+ ảnh/ngày)",
+                          "https://dash.cloudflare.com/"],
+  CLOUDFLARE_API_TOKEN: ["Cloudflare API token", "Token có quyền Workers AI", "https://dash.cloudflare.com/profile/api-tokens"],
 };
 
 async function loadChecks() {

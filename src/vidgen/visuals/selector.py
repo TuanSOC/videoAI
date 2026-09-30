@@ -268,8 +268,9 @@ class Selector:
             return None
         if video:
             self.ai_video_budget -= 1
+        source = "wan" if video else getattr(self.ai, "last", "") or "flux"   # which generator drew it
         return Asset(scene_id=scene.id, path=f"visuals/{path.name}", kind="video" if video else "image",
-                     source="wan" if video else "flux", license="AI-generated")
+                     source=source, license="AI-generated")
 
     def _stock(self, scene: Scene, seconds: float, kind: str, query_text: str | None = None,
                strict: bool = True, bar: int = MIN_VISION) -> Asset | None:
@@ -535,15 +536,15 @@ def stock_clients(s: Settings) -> list[StockClient]:
 
 
 def build_selector(script: Script, preset: FormatPreset, out_dir: Path, s: Settings) -> Selector:
-    from vidgen.visuals.ai import AIGenerator
-    from vidgen.visuals.comfy import ComfyClient
+    from vidgen.visuals.ai import build_sources
 
     cache = s.path(s.pipeline.cache_dir)
     clients = stock_clients(s)
-    comfy = ComfyClient(s.secrets.comfyui_url)
-    ai = AIGenerator(comfy, s, script.format) if comfy.available() else None
+    ai = build_sources(s, script.format)   # ComfyUI when it answers, else Cloudflare; None = no AI stills
+    if ai is not None:
+        log.info("AI image sources: %s", ", ".join(x.name for x in ai.sources))
     if not clients and ai is None:
-        log.warning("no stock API keys and ComfyUI offline — every scene will be a placeholder")
+        log.warning("no stock API keys and no AI image source — every scene will be a placeholder")
     subject = video_subject([sc.visual_query for sc in script.scenes])
     log.info("video subject for clip matching: %s", subject)
     # the text judge stays as a backup: it only runs in a round the vision judge had no opinion on

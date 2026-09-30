@@ -22,3 +22,13 @@ A generator for the phase 2 gate. Pollinations ruled out live (580×1015 Sana, w
 ## Requirements (whichever source)
 - Same `image(prompt, out) -> Path` interface as `AIGenerator`; cached like other assets; 9:16 at ≥ 768×1344;
   failures fall through the chain; doctor shows the source's status.
+
+## Results (2026-09-30) — code done, waiting on credentials / install
+- User chose both: `ai.image_sources: [comfyui, cloudflare]` → `ImageSources` tries ComfyUI (when it answers) then
+  Cloudflare; AI video stays ComfyUI-only; asset source = the generator that drew ("flux" / "cloudflare").
+- `visuals/cloudflare.py`: flux-2-klein-4b by default (multipart, width/height 256-1920 → true 768×1344),
+  flux-1-schnell supported (JSON, square). Docs (2026-09): free plan 10,000 neurons/day; schnell ≈ 58 neurons per
+  1024² image (~170/day); klein price not published → measure on first use.
+- Secrets CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN (.env, studio settings, doctor row). Metadata AI
+  disclosure now keyed on license/source (Cloudflare stills were missed by the old flux/wan check).
+- Not yet live: no token here, ComfyUI not installed. 415 tests green.

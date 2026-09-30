@@ -65,7 +65,13 @@ def run_checks(s: Settings) -> list[Check]:
         comfy_f = pool.submit(_http_ok, f"{sec.comfyui_url}/system_stats")
         ollama_f = pool.submit(_ollama_models, sec.ollama_url)
         comfy, models = comfy_f.result(), ollama_f.result()
-    checks.append(Check("ComfyUI", comfy, sec.comfyui_url if comfy else "offline → no AI image/video", required=False))
+    checks.append(Check("ComfyUI", comfy, sec.comfyui_url if comfy else "offline → no local AI image/video",
+                        required=False))
+    if "cloudflare" in s.pipeline.ai.image_sources:
+        cf = bool(sec.cloudflare_account_id and sec.cloudflare_api_token)
+        checks.append(Check("Cloudflare Workers AI", cf, s.pipeline.ai.cloudflare_model if cf
+                            else "CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN missing → no cloud AI stills",
+                            required=False))
 
     # per-provider rows are warnings; "LLM available" below is the one required gate
     usable: list[str] = []
