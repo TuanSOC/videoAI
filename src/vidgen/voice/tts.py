@@ -20,7 +20,7 @@ class TTSError(RuntimeError):
     pass
 
 
-async def synth_edge(text: str, voice: str, out: Path, attempts: int = 4,
+async def synth_edge(text: str, voice: str, out: Path, attempts: int = 6,
                      rate: str = "+0%") -> list[WordTiming]:
     """Write MP3 to `out`; return word timings relative to the start of that file."""
     for attempt in range(1, attempts + 1):
@@ -45,5 +45,7 @@ async def synth_edge(text: str, voice: str, out: Path, attempts: int = 4,
                     f"edge-tts failed for voice {voice}: {e}. "
                     "Check internet access; edge-tts is an unofficial Microsoft endpoint."
                 ) from e
-            await asyncio.sleep(2 ** attempt)  # 2, 4, 8s: throttling clears within seconds
+            # 2, 4, 8, 16, 32 s (~1 min in all): short hiccups clear in seconds, but Microsoft's throttling after a
+            # busy stretch lasted longer (seen three times live: 4 tries over 14 s all failed)
+            await asyncio.sleep(2 ** attempt)
     raise AssertionError("unreachable")
