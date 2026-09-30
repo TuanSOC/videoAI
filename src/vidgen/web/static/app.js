@@ -66,6 +66,7 @@ function poll(fn, ms) { stopPolling(); pollTimer = setTimeout(fn, ms); }
 const JOB_LABEL = {
   brief: "Tìm góc & nguồn", script: "Viết kịch bản", voice: "Giọng đọc", visuals: "Hình ảnh",
   render: "Dựng video", metadata: "Metadata", extend: "Kéo dài kịch bản", check: "Kiểm tra dữ kiện",
+  series: "Series (vidgen series)",
 };
 const DONE_TEXT = {
   done: "Video đã xong ✅", rendered: "Video đã dựng xong ✅", review: "Kịch bản sẵn sàng để duyệt",

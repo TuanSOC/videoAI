@@ -79,3 +79,29 @@ def test_run_makes_due_videos_once_and_resumes_an_unfinished_one(tmp_path, monke
     made.clear(), rendered.clear()
     sr.run(path, settings=None, today=date(2026, 10, 5))
     assert made == [] and rendered == ["v1vi"]
+
+
+def test_finish_refuses_a_folder_the_studio_is_working_on_and_marks_its_own_work(tmp_path, monkeypatch):
+    """Seen live: the CLI series and a studio render ran on one folder; one deleted the other's segments."""
+    from vidgen import pipeline
+    from vidgen.web.jobs import load_job
+    d = tmp_path / "v"
+    d.mkdir()
+    (d / "job.json").write_text(json.dumps({"slug": "v", "kind": "render", "status": "running"}), encoding="utf-8")
+    with pytest.raises(pipeline.FolderBusyError):
+        sr._finish(d, settings=None)
+
+    (d / "job.json").write_text(json.dumps({"slug": "v", "kind": "render", "status": "error"}), encoding="utf-8")
+    (d / "script.json").write_text("{}", encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(pipeline, "load_brief", lambda out_dir: Brief(topic="t", angles=[
+        Angle(style="story", title="T", hook="h", key_points=["k"])]))
+
+    def stages(out_dir, settings, on_stage=lambda n, st: None):
+        seen.append(load_job(out_dir).status)                 # the studio sees the folder as busy meanwhile
+        on_stage("voice", "run")
+        seen.append(load_job(out_dir).current)
+    monkeypatch.setattr(pipeline, "run_stages", stages)
+    sr._finish(d, settings=None)
+    job = load_job(d)
+    assert seen == ["running", "voice"] and job.status == "done" and job.kind == "series"
