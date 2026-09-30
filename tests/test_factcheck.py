@@ -203,3 +203,10 @@ def test_checkers_run_cooler_than_the_writer():
     assert default_chain(s).providers[0].temperature == 0.7
     assert default_chain(s, "checker").providers[0].temperature == 0.2
     assert default_chain(s, "second_checker").providers[0].temperature == 0.2
+
+
+def test_a_broken_script_never_fails_the_check(tmp_path):
+    """Review finding 5: check_facts promises never to fail its caller."""
+    (tmp_path / "script.json").write_text("{not json", encoding="utf-8")
+    pipeline.check_facts(tmp_path, get_settings())
+    assert json.loads((tmp_path / "factcheck.json").read_text(encoding="utf-8"))["checked"] is False

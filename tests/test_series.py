@@ -33,9 +33,17 @@ def test_an_episode_can_pin_its_own_date_and_the_rest_keep_their_slots():
                                             date(2026, 10, 9)]
 
 
-def test_due_items_are_each_language_of_each_episode_not_made_yet():
-    items = sr.due(frame(), today=date(2026, 10, 7), state={"1/vi": "slug-1-vi"})
-    assert [(e.id, lang) for _, e, lang in items] == [(1, "en"), (2, "vi"), (2, "en")]
+def test_status_of_every_episode_language(tmp_path):
+    """One status rule for the CLI table and run() (review finding: it was written three times)."""
+    (tmp_path / "made").mkdir()
+    (tmp_path / "made" / "final.mp4").write_bytes(b"x")
+    (tmp_path / "half").mkdir()
+    state = {"1/vi": "made", "1/en": "half", "2/vi": "deleted-by-hand"}
+    items = sr.items(frame(), state, date(2026, 10, 7), lambda slug: tmp_path / slug)
+    assert [(i.episode.id, i.lang, i.status) for i in items] == [
+        (1, "vi", "made"), (1, "en", "unfinished"),
+        (2, "vi", "due"),                  # its folder was deleted: made again, not "resumed" forever
+        (2, "en", "due"), (3, "vi", "planned"), (3, "en", "planned"), (4, "vi", "planned"), (4, "en", "planned")]
 
 
 def test_a_frame_with_a_missing_translation_or_duplicate_ids_is_rejected():
@@ -126,3 +134,21 @@ def test_ctrl_c_leaves_the_episode_interrupted_and_the_folder_free(tmp_path, mon
         sr._finish(d, settings=None)
     assert load_job(d).status == "interrupted" and not is_locked(d)
     pipeline.ensure_not_busy(d)                        # the next run may take it
+
+
+def test_a_deleted_episode_folder_is_made_again(tmp_path, monkeypatch):
+    path = tmp_path / "s.yaml"
+    path.write_text(json.dumps(frame().model_dump(mode="json")), encoding="utf-8")
+    sr.state_path(path).write_text(json.dumps({"1/vi": "gone"}), encoding="utf-8")
+    made = []
+
+    def create(ep, lang, s, fmt, settings):
+        made.append((ep.id, lang))
+        d = tmp_path / f"new{ep.id}{lang}"
+        d.mkdir()
+        return d
+    monkeypatch.setattr(sr, "_create", create)
+    monkeypatch.setattr(sr, "_finish", lambda d, settings: {"flags": 0})
+    monkeypatch.setattr(sr, "_dir", lambda slug, settings: tmp_path / slug)
+    sr.run(path, settings=None, today=date(2026, 10, 5), limit=1)
+    assert made == [(1, "vi")] and json.loads(sr.state_path(path).read_text(encoding="utf-8"))["1/vi"] == "new1vi"

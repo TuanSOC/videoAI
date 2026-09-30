@@ -241,7 +241,9 @@ def rewrite_one(script: Script, scene: Scene, prev: str, nxt: str, instruction: 
                 out = retry
         except Exception as e:  # the first answer is still usable
             log.warning("shorter rewrite failed: %s", e)
-    out = out.model_copy(update={"narration": plain(out.narration)})
+    out = out.model_copy(update={"narration": plain(out.narration), "ai_prompt": plain(out.ai_prompt),
+                                 "visual_query": strip_meta(out.visual_query) or scene.visual_query,
+                                 "alt_queries": [strip_meta(a) for a in out.alt_queries]})
     if not out.visual_query.isascii():  # seen live: a Vietnamese query, useless for stock search
         out = out.model_copy(update={"visual_query": scene.visual_query})
     return out.model_copy(update={"alt_queries": clean_alt_queries(out.visual_query, out.alt_queries)})
@@ -249,7 +251,7 @@ def rewrite_one(script: Script, scene: Scene, prev: str, nxt: str, instruction: 
 
 # seen live: asked for a visual metaphor, the model wrote the word itself ("broken shield metaphor") — useless
 # in a stock search box
-META_WORDS = re.compile(r"\b(?:visual\s+)?metaphor(?:ical)?(?:\s+of)?\b|\b(?:symbolic|abstract|conceptual|concept)\b",
+META_WORDS = re.compile(r"\b(?:visual\s+)?metaphor(?:ical)?(?:\s+of)?\b|\bsymbolic\b",
                         re.I)
 
 
@@ -515,7 +517,8 @@ def postprocess(scenes: list[Scene], max_ai_video: int) -> list[Scene]:
                 vtype = "ai_image"
         query = strip_meta(scene.visual_query)
         alts = clean_alt_queries(query, [strip_meta(a) for a in scene.alt_queries])
-        if not query.isascii():  # stock search is English-only (seen live: a Vietnamese query)
+        # stock search is English-only (seen live: a Vietnamese query) and needs words ("visual metaphor" → "")
+        if not query or not query.isascii():
             if alts:
                 query, alts = alts[0], alts[1:]
             elif out:

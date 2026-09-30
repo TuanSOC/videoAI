@@ -1,9 +1,9 @@
 ---
 phase: 3
-title: "Script and series fixes"
-status: pending
+title: Script and series fixes
+status: completed
 priority: P2
-effort: "0.25d"
+effort: 0.25d
 dependencies: []
 ---
 

@@ -15,6 +15,7 @@ import logging
 import time
 import datetime as dt
 from datetime import timedelta
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -90,9 +91,29 @@ def key(e: Episode, lang: str) -> str:
     return f"{e.id}/{lang}"
 
 
-def due(s: Series, today: dt.date, state: dict[str, str]) -> list[tuple[dt.date, Episode, str]]:
-    """Every (date, episode, language) scheduled by `today` and not made yet."""
-    return [(d, e, lang) for d, e in schedule(s) if d <= today for lang in s.langs if key(e, lang) not in state]
+@dataclass
+class Item:
+    date: dt.date
+    episode: Episode
+    lang: str
+    status: str             # made | unfinished | due | planned
+    out_dir: Path | None    # the episode's video folder, if one exists
+
+
+def items(s: Series, state: dict[str, str], today: dt.date, locate) -> list[Item]:
+    """Every (episode, language) with its status — the one rule the CLI table and run() share. A recorded
+    folder that no longer exists (deleted by hand) counts as not made: it is made again, never "resumed"."""
+    out = []
+    for d, e in schedule(s):
+        for lang in s.langs:
+            slug = state.get(key(e, lang))
+            folder = locate(slug) if slug else None
+            if folder is not None and not folder.exists():
+                folder = None
+            status = ("made" if folder is not None and (folder / "final.mp4").exists() else
+                      "unfinished" if folder is not None else "due" if d <= today else "planned")
+            out.append(Item(d, e, lang, status, folder))
+    return out
 
 
 def angle_index(brief: Brief, style: str) -> int:
@@ -176,26 +197,21 @@ def run(path: Path, settings: Settings | None, today: dt.date | None = None, lim
     s, today = load(path), today or dt.date.today()
     state = _read_state(path)
     worked: list[Path] = []
-    for d, e in schedule(s):
-        if d > today:
+    for item in items(s, state, today, lambda slug: _dir(slug, settings)):
+        if item.status not in ("due", "unfinished"):
             continue
-        for lang in s.langs:
-            if limit is not None and len(worked) >= limit:
-                return worked
-            slug = state.get(key(e, lang))
-            if slug is not None and (_dir(slug, settings) / "final.mp4").exists():
-                continue
-            if slug is None:
-                out_dir = _create(e, lang, s, s.format, settings)
-                state[key(e, lang)] = out_dir.name
-                write_atomic(state_path(path), json.dumps(state, ensure_ascii=False, indent=2))
-            else:
-                out_dir = _dir(slug, settings)
-            try:
-                result = _finish(out_dir, settings)
-            except Exception as e_:  # one failed video must not stop the rest; it resumes next run
-                log.error("series %s episode %s/%s failed: %s", s.name, e.id, lang, e_)
-                result = {"error": str(e_)}
-            worked.append(out_dir)
-            on_video(d, e, lang, out_dir, result)
+        if limit is not None and len(worked) >= limit:
+            break
+        out_dir = item.out_dir
+        if item.status == "due":
+            out_dir = _create(item.episode, item.lang, s, s.format, settings)
+            state[key(item.episode, item.lang)] = out_dir.name
+            write_atomic(state_path(path), json.dumps(state, ensure_ascii=False, indent=2))
+        try:
+            result = _finish(out_dir, settings)
+        except Exception as e:  # one failed video must not stop the rest; it resumes next run
+            log.error("series %s episode %s/%s failed: %s", s.name, item.episode.id, item.lang, e)
+            result = {"error": str(e)}
+        worked.append(out_dir)
+        on_video(item.date, item.episode, item.lang, out_dir, result)
     return worked

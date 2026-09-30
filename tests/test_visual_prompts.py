@@ -53,7 +53,7 @@ def test_the_word_metaphor_never_reaches_stock_search_and_notes_are_plain():
                                     ai_prompt="close\u2011up of a cracked shield, rim light")], 0)
     s = out[0]
     assert s.visual_query == "broken shield"
-    assert s.alt_queries == ["virus spreading", "cracked padlock"]
+    assert s.alt_queries == ["virus spreading", "abstract cracked padlock"]   # "abstract" is a real word
     assert s.ai_prompt == "close-up of a cracked shield, rim light"
 
 
@@ -65,3 +65,37 @@ def test_inserted_hook_and_question_scenes_keep_a_shot_note():
     angle = Angle(style="story", title="T", hook="Bệnh viện Anh tê liệt trong một ngày.", key_points=["k"])
     out = writer._open_loop_structure(scenes, "Vì sao lại như vậy?", angle, 0)
     assert all(s.ai_prompt for s in out)
+
+
+@pytest.mark.parametrize("query, kept", [("abstract glitch effect macro", "abstract glitch effect macro"),
+                                         ("concept car in the rain", "concept car in the rain"),
+                                         ("broken shield metaphor", "broken shield"),
+                                         ("symbolic cracked padlock", "cracked padlock")])
+def test_only_metaphor_words_are_stripped(query, kept):
+    """Review finding 6: 'abstract'/'concept' are real words ('concept car')."""
+    assert writer.strip_meta(query) == kept
+
+
+def test_a_query_that_was_only_meta_words_borrows_an_alternative():
+    out = writer.postprocess([Scene(id=0, narration="Một câu.", visual_query="visual metaphor",
+                                    alt_queries=["cracked padlock macro"])], 0)
+    assert out[0].visual_query == "cracked padlock macro"
+
+
+def test_a_rewritten_scene_gets_the_same_cleaning(monkeypatch):
+    """Review finding 7: the rewrite path skipped strip_meta and plain()."""
+    import json as _json
+
+    from vidgen.models import Script
+    from vidgen.script.llm import LLMChain
+
+    class One:
+        name = "fake"
+
+        def generate_json(self, prompt, schema):
+            return _json.dumps({"narration": "Mới.", "visual_query": "broken shield metaphor",
+                                "alt_queries": ["visual metaphor of trust"], "ai_prompt": "close\u2011up, rim light"})
+    script = Script(title="t", hook="h", lang="vi", format="short",
+                    scenes=[Scene(id=1, narration="Cũ.", visual_query="q")])
+    out = writer.rewrite_one(script, script.scenes[0], "", "", "x", [], None, LLMChain([One()]))
+    assert out.visual_query == "broken shield" and out.alt_queries == ["trust"] and out.ai_prompt == "close-up, rim light"

@@ -248,9 +248,14 @@ def check_facts(out_dir: Path, s: Settings) -> None:
     from vidgen.script.factcheck import FILE, fact_check, merge
     from vidgen.script.llm import default_chain
 
-    sources, _ = _sources_and_angle(out_dir)
-    script = Job(out_dir, s).read_script()
     results = []
+    try:
+        sources, _ = _sources_and_angle(out_dir)
+        script = Job(out_dir, s).read_script()
+    except Exception as e:  # a broken or half-written script: "not checked", never a failed stage
+        log.warning("fact check skipped: %s", e)
+        write_atomic(out_dir / FILE, merge().model_dump_json(indent=2))
+        return
     for role in ("checker", "second_checker") if s.pipeline.llm.second_checker else ("checker",):
         try:
             results.append(fact_check(script, sources, default_chain(s, role)))

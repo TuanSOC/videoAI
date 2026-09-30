@@ -58,7 +58,6 @@ class LookRequest(BaseModel):
     @field_validator("look")
     @classmethod
     def _known(cls, v: str) -> str:
-        from vidgen.assemble.looks import LOOKS
         if v not in LOOKS:
             raise ValueError(f"look must be one of {', '.join(LOOKS)}")
         return v

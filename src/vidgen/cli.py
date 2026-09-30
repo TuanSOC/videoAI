@@ -151,12 +151,10 @@ def series(
     today = dt.date.fromisoformat(until) if until else dt.date.today()
     frame, state = sr.load(file), sr._read_state(file)
     table = Table("date", "#", "pillar", "angle", "lang", "status", "topic")
-    for d, e in sr.schedule(frame):
-        for lang in frame.langs:
-            slug = state.get(sr.key(e, lang))
-            status = ("[green]made[/]" if slug and (sr._dir(slug, get_settings()) / "final.mp4").exists()
-                      else "[yellow]unfinished[/]" if slug else "[cyan]due[/]" if d <= today else "planned")
-            table.add_row(d.isoformat(), str(e.id), e.pillar, e.angle, lang, status, e.topic[lang])
+    colour = {"made": "green", "unfinished": "yellow", "due": "cyan", "planned": "white"}
+    for i in sr.items(frame, state, today, lambda slug: sr._dir(slug, get_settings())):
+        table.add_row(i.date.isoformat(), str(i.episode.id), i.episode.pillar, i.episode.angle, i.lang,
+                      f"[{colour[i.status]}]{i.status}[/]", i.episode.topic[i.lang])
     console.print(table)
     if dry_run:
         return

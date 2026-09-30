@@ -28,7 +28,7 @@ Context: `plans/reports/brainstorm-260930-pipeline-reliability.md`. TDD: a faili
 |-------|------|--------|
 | 1 | [Folder lock and job ownership](./phase-01-folder-lock-and-job-ownership.md) | Completed |
 | 2 | [Visual pipeline fixes](./phase-02-visual-pipeline-fixes.md) | Completed |
-| 3 | [Script and series fixes](./phase-03-script-and-series-fixes.md) | Pending |
+| 3 | [Script and series fixes](./phase-03-script-and-series-fixes.md) | Completed |
 | 4 | [Live verification](./phase-04-live-verification.md) | Pending |
 
 ## Pipeline contract after this plan
