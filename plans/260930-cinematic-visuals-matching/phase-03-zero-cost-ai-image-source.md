@@ -32,3 +32,12 @@ A generator for the phase 2 gate. Pollinations ruled out live (580×1015 Sana, w
 - Secrets CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN (.env, studio settings, doctor row). Metadata AI
   disclosure now keyed on license/source (Cloudflare stills were missed by the old flux/wan check).
 - Not yet live: no token here, ComfyUI not installed. 415 tests green.
+
+## Live results (2026-09-30, ComfyUI installed at D:\ComfyUI)
+- torch 2.14 cu126 (driver 560.92); Flux schnell Q4 GGUF; VAE from the Comfy-Org mirror (BFL repo gated, 401).
+- 768×1344 still: 40 s first (model load), 26 s after; peak VRAM 6.3 GB.
+- Found live and fixed: Flux resident in VRAM pushed the vision model to CPU (sourcing 524 s) → ComfyUI freed
+  before the vision session, drawing deferred until after it (143 s); shot notes about screens/notices/UIs
+  gave gibberish text ("FARE EANK", "WARNIN WARNING") → such notes are never drawn (stock kept).
+- Phishing short (16 scenes): 1 scene drawn, rest stock ≥ 5 with judge; 59 s, 0 flags, -14.0 LUFS.
+- Cloudflare still needs the user's account/token.
