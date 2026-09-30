@@ -34,6 +34,14 @@ DOWNLOAD_WORKERS = 4
 MAX_REJECTED = 50
 EXTRA_AFTER = 5.0  # seconds: longer scenes also get their next-best clip, cut in as a second shot
 VISION_TOP = 5     # thumbnails shown to the vision judge per search round
+# subjects an image model can only fill with unreadable pseudo-text
+TEXT_SUBJECT = re.compile(
+    r"\b(?:screens?|monitors?|displays?|displaying|inbox|e-?mails?|websites?|web ?pages?|documents?|letters?|"
+    r"newspapers?|headlines?|signs?|signage|posters?|captions?|pop-?ups?|notifications?|messages?|chats?|"
+    r"comment (?:box|section)|interfaces?|dashboards?|spreadsheets?|texts?|logos?|menus?)\b", re.I)
+# "..., no text, no logos" is the shot note asking for the opposite: not a text subject
+NO_TEXT = re.compile(r"\b(?:no|without|free of)\s+(?:any\s+)?(?:text|logos?|signs?|letters?|writing|captions?)"
+                     r"(?:\s*(?:,|or|and)\s*(?:no\s+)?(?:text|logos?|signs?|letters?|writing|captions?))*", re.I)
 MIN_VISION = 5     # the prompt calls 5 "generic but acceptable"; 6 made most scenes search every round (~21 s each)
 MIN_FALLBACK = 3   # a loose match still beats a placeholder; below this it doesn't
 VISION_CALLS_PER_KIND = 2   # judge calls per scene for videos, and again for images
@@ -264,10 +272,15 @@ class Selector:
     def _ai(self, scene: Scene, video: bool) -> Asset | None:
         if self.ai is None:
             return None
+        prompt = scene.ai_prompt or default_ai_prompt(scene.visual_query)
+        if TEXT_SUBJECT.search(NO_TEXT.sub(" ", prompt)):
+            # Flux turns text into gibberish ("FARE EANK", "Ustcrents Alert" — seen live): a screen, document or
+            # sign as the subject looks cheaper than any stock clip, so this scene keeps its stock
+            log.info("scene %d: not drawn — the shot is about text (%s)", scene.id, prompt[:60])
+            return None
         if self.defer_ai:
             self.deferred.setdefault(scene.id, (scene, video))   # the first request (video before image) wins
             return None
-        prompt = scene.ai_prompt or default_ai_prompt(scene.visual_query)
         out = self.visuals_dir / f"scene_{scene.id:03d}"
         try:
             path = self.ai.video(prompt, out) if video else self.ai.image(prompt, out)

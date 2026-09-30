@@ -397,3 +397,21 @@ def test_comfyui_lets_go_of_the_gpu_before_the_vision_model_loads(tmp_path, fake
     with sel.vision_session(s, get_settings()):
         s.pick(gate_scene(), 5)
     assert events[:2] == ["comfy freed", "vision scores"]
+
+
+@pytest.mark.parametrize("note, drawn", [
+    ("Extreme close-up of a computer screen showing an email inbox, soft light", False),
+    ("Close-up of a smartphone displaying a fake bank email, high contrast", False),
+    ("Medium shot of a red urgent alert pop-up on a monitor", False),
+    ("Low angle of a rusty fishing hook piercing a paper envelope, rim light", True),
+    ("Extreme macro of a human eye reflecting glowing green code, neon rim light", True),
+    ("Aerial drone of a stormy sea, vertical 9:16, photorealistic, no text, no logos, without signs", True),
+    ("Low angle of rock forms in a canyon at golden hour", True),
+])
+def test_shots_whose_subject_is_text_are_not_drawn(tmp_path, fake_io, note, drawn):
+    """Seen live: Flux drew 'FARE EANK' banks and 'Ustcrents Alert' pop-ups — gibberish text reads as cheap AI."""
+    ai = DrawAI()
+    s = gated(tmp_path, FakeStock({}), None, ai)
+    s.visuals_dir.mkdir(parents=True, exist_ok=True)
+    asset = s._ai(Scene(id=1, narration="n", visual_query="q", ai_prompt=note), video=False)
+    assert (asset is not None) is drawn and len(ai.prompts) == int(drawn)
