@@ -3,7 +3,7 @@ title: Pipeline reliability and review fixes
 description: >-
   One owner per video folder (OS file lock), no stuck jobs, no cross-process
   races; the 10 review findings
-status: pending
+status: completed
 priority: P1
 branch: main
 tags:
@@ -29,7 +29,7 @@ Context: `plans/reports/brainstorm-260930-pipeline-reliability.md`. TDD: a faili
 | 1 | [Folder lock and job ownership](./phase-01-folder-lock-and-job-ownership.md) | Completed |
 | 2 | [Visual pipeline fixes](./phase-02-visual-pipeline-fixes.md) | Completed |
 | 3 | [Script and series fixes](./phase-03-script-and-series-fixes.md) | Completed |
-| 4 | [Live verification](./phase-04-live-verification.md) | Pending |
+| 4 | [Live verification](./phase-04-live-verification.md) | Completed |
 
 ## Pipeline contract after this plan
 1. Whoever runs stages on a folder holds `.vidgen.lock` (OS lock; freed on exit, crash, kill, Ctrl-C).
