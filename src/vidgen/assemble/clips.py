@@ -77,6 +77,7 @@ class Shot:
     card: bool = False           # a document card (visuals/document.py)
     transition: str = "fade"     # the xfade into this shot when transition_in (assemble/transitions.py)
     look: str = "neutral"        # colour grade (assemble/looks.py); evidence cards always neutral
+    accent: float | None = None  # the impact cue this shot's transition answers (transitions.py)
 
 
 def fade_frames(p: FormatPreset) -> int:
@@ -219,7 +220,7 @@ def _analyse_all(shots: list[Shot], p: FormatPreset) -> None:
 
 def render_segments(assets: list[Asset], timeline: Timeline, p: FormatPreset, out_dir: Path, fmt: str = "short",
                     cues_for: Callable[[list[float]], list] | None = None,
-                    look: str = "neutral") -> tuple[list[Path], list]:
+                    look: str = "neutral") -> tuple[list[Path], list, set[float]]:
     """Segment files in order, and the sound cues. The cues are planned from the shot plan's scene-change
     times BEFORE rendering (`cues_for`), because each scene change's transition follows its cue."""
     seg_dir = out_dir / "segments"
@@ -232,7 +233,7 @@ def render_segments(assets: list[Asset], timeline: Timeline, p: FormatPreset, ou
         clip_seconds = dict(zip(videos, pool.map(_safe_duration, videos)))
     shots = plan_shots(timeline, assets, p, fmt, out_dir, clip_seconds, look)
     cues = cues_for(cut_times(shots, p.fps)) if cues_for else []
-    from vidgen.assemble.transitions import assign_transitions   # transitions imports Shot from here
+    from vidgen.assemble.transitions import assign_transitions, used_impacts   # transitions imports Shot
     assign_transitions(shots, cues, p.fps)
     _analyse_all(shots, p)
 
@@ -246,7 +247,7 @@ def render_segments(assets: list[Asset], timeline: Timeline, p: FormatPreset, ou
 
     with ThreadPoolExecutor(WORKERS) as pool:
         list(pool.map(render, jobs))
-    return [j[2] for j in jobs], cues
+    return [j[2] for j in jobs], cues, used_impacts(shots)
 
 
 def _safe_duration(path: Path) -> float:

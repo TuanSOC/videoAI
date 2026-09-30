@@ -40,6 +40,11 @@ def pick_transition(prev: Shot, cur: Shot, cue: Cue | None, last: str) -> str:
     return DEFAULT
 
 
+def used_impacts(shots: list[Shot]) -> set[float]:
+    """Impact cues a transition already answers (zoomin / fadeblack); the rest get the punch zoom."""
+    return {s.accent for s in shots if s.accent is not None}
+
+
 def assign_transitions(shots: list[Shot], cues: list[Cue], fps: int) -> list[str]:
     """Set `transition` on every shot that a scene change cross-fades into; returns them in order."""
     chosen: list[str] = []
@@ -50,8 +55,10 @@ def assign_transitions(shots: list[Shot], cues: list[Cue], fps: int) -> list[str
             continue
         cut = frames / fps
         near = [c for c in cues if abs(c.time - cut) <= CUE_WINDOW]
-        cue = min(near, key=lambda c: abs(c.time - cut), default=None)
+        # an impact outranks a whoosh at the same cut (as in the sound mix, sfx.PRIORITY)
+        cue = min(near, key=lambda c: (c.kind != "impact", abs(c.time - cut)), default=None)
         cur.transition = pick_transition(prev, cur, cue, last)
+        cur.accent = cue.time if cue is not None and cue.kind == "impact" and cur.transition in IMPACT else None
         if cur.transition != DEFAULT:   # fades between two whooshes must not let the same move repeat
             last = cur.transition
         chosen.append(cur.transition)

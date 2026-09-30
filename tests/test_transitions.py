@@ -144,7 +144,7 @@ def test_a_still_clip_drifts_on_the_same_eased_curve_and_a_moving_one_does_not()
 def test_impacts_on_a_scene_change_are_left_to_the_transition():
     from vidgen.assemble.render import punch_times
     cues = [Cue("impact", 0.0), Cue("impact", 6.1), Cue("impact", 12.4), Cue("whoosh", 20.0)]
-    assert punch_times(cues, cuts=[6.0, 20.1]) == [0.0, 12.4]
+    assert punch_times(cues, used={6.1}) == [0.0, 12.4]
 
 
 def test_punch_zoom_rises_fast_and_eases_back():
@@ -190,3 +190,17 @@ def test_segments_are_always_yuv420p_tv_range(tmp_path):
                                 "stream=pix_fmt,color_range", "-of", "csv=p=0", str(out)],
                                capture_output=True, text=True).stdout.strip()
         assert probe == "yuv420p,tv", (nxt, probe)
+
+
+def test_an_impact_on_a_cut_beats_a_nearer_whoosh_and_a_card_impact_still_punches():
+    """Finding 8: an impact at a scene change lost to a nearer whoosh (or a card's slideup) and got no accent."""
+    from vidgen.assemble.render import punch_times
+    fps = P.fps
+    shots = [shot(frames=90, scene=1), shot(frames=90, scene=2), shot(frames=90, scene=3, card=True)]
+    shots[0].transition_in = False
+    cuts = cut_times(shots, fps)
+    cues = [Cue("whoosh", round(cuts[0] - 0.09, 3), 0), Cue("impact", cuts[0] + 0.2),   # impact wins cut 1
+            Cue("impact", cuts[1] + 0.1)]                                                # card: slideup, punch
+    chosen = tr.assign_transitions(shots, cues, fps)
+    assert chosen == ["fadeblack", "slideup"]
+    assert punch_times(cues, used=tr.used_impacts(shots)) == [cues[2].time]

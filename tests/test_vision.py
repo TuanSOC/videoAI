@@ -419,3 +419,39 @@ def test_shots_whose_subject_is_text_are_not_drawn(tmp_path, fake_io, note, draw
     s.visuals_dir.mkdir(parents=True, exist_ok=True)
     asset = s._ai(Scene(id=1, narration="n", visual_query="q", ai_prompt=note), video=False)
     assert (asset is not None) is drawn and len(ai.prompts) == int(drawn)
+
+
+# --- review fixes (pipeline reliability phase 2) -----------------------------------------------------------
+def test_a_drawing_never_writes_through_the_stock_files_cache_link(tmp_path, fake_io):
+    """Finding 1: the drawn still went to scene_NNN.<ext>, the stock fallback's hardlink into cache/files."""
+    import os
+    s = gated(tmp_path, FakeStock({}), None, DrawAI())
+    s.visuals_dir.mkdir(parents=True, exist_ok=True)
+    cached = tmp_path / "cache" / "files" / "photo.png"
+    cached.parent.mkdir(parents=True)
+    cached.write_bytes(b"stock photo")
+    os.link(cached, s.visuals_dir / "scene_001.png")            # what _link_or_copy leaves for the fallback
+    asset = s._ai(gate_scene(), video=False)
+    assert asset.path == "visuals/scene_001_ai.png" and cached.read_bytes() == b"stock photo"
+
+
+@pytest.mark.parametrize("note", [
+    "Extreme macro of a cracked padlock, no visible text",
+    "Low angle of a burning banknote, text-free, dramatic rim light",
+    "Macro of a dripping faucet, no readable text, cinematic",
+    "Hooded person typing on a keyboard in the dark, rim light, without any writing",
+    "Wide shot of a library, old books on shelves, golden hour",
+])
+def test_ordinary_shot_notes_are_drawn(tmp_path, fake_io, note):
+    """Finding 4: negations and everyday words were read as 'the subject is text'."""
+    ai = DrawAI()
+    s = gated(tmp_path, FakeStock({}), None, ai)
+    s.visuals_dir.mkdir(parents=True, exist_ok=True)
+    assert s._ai(Scene(id=1, narration="n", visual_query="q", ai_prompt=note), video=False) is not None
+
+
+def test_drawing_has_its_own_short_timeout():
+    """A hung ComfyUI held a scene for the 1800 s meant for AI video."""
+    from vidgen.config import get_settings
+    cfg = get_settings().pipeline.ai
+    assert cfg.image_timeout_seconds == 180 and cfg.timeout_seconds == 1800

@@ -1,9 +1,9 @@
 ---
 phase: 2
-title: "Visual pipeline fixes"
-status: pending
+title: Visual pipeline fixes
+status: completed
 priority: P1
-effort: "0.5d"
+effort: 0.5d
 dependencies: []
 ---
 

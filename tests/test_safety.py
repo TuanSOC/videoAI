@@ -75,7 +75,7 @@ def test_failed_final_encode_leaves_no_final_mp4(tmp_path, monkeypatch):
         (cwd / args[-1]).write_bytes(b"half")      # ffmpeg writes part of the output, then dies
         raise render.ffmpeg.FFmpegError("boom")
     monkeypatch.setattr(render, "MUSIC_DIR", tmp_path / "no-music")
-    monkeypatch.setattr(render, "render_segments", lambda *a, **k: ([], []))
+    monkeypatch.setattr(render, "render_segments", lambda *a, **k: ([], [], set()))
     monkeypatch.setattr(render.ffmpeg, "run", fake_run)
     (tmp_path / "segments").mkdir()
     tl = Timeline(scenes=[SceneAudio(scene_id=1, path="", start=0, duration=1,

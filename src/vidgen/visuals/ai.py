@@ -28,7 +28,7 @@ class AIGenerator:
             "PROMPT": prompt, "WIDTH": w, "HEIGHT": h,
             "SEED": seed if seed is not None else random.randrange(2**31),
             "PREFIX": "vidgen/img",
-        }, out, self.cfg.timeout_seconds)
+        }, out, self.cfg.image_timeout_seconds)
 
     def video(self, prompt: str, out: Path, seed: int | None = None) -> Path:
         """Flux still first (better composition control), then animate it with Wan 2.2."""

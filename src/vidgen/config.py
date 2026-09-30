@@ -95,7 +95,8 @@ class AIConfig(BaseModel):
     image_size: dict[str, tuple[int, int]] = {"short": (768, 1344), "long": (1344, 768)}
     video_size: dict[str, tuple[int, int]] = {"short": (544, 960), "long": (960, 544)}
     video_frames: int = 81
-    timeout_seconds: int = 1800
+    timeout_seconds: int = 1800        # AI video (Wan)
+    image_timeout_seconds: int = 180   # a still takes 26-40 s: a hung ComfyUI must not hold a scene for 30 min
     # stills: the first usable source draws (comfyui = local, when it answers; cloudflare = Workers AI free
     # daily allocation, needs CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN). AI video is ComfyUI only.
     image_sources: list[Literal["comfyui", "cloudflare"]] = ["comfyui", "cloudflare"]

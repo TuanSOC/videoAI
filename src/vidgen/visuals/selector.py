@@ -39,11 +39,12 @@ TEXT_SUBJECT = re.compile(
     r"\b(?:screens?|monitors?|displays?|displaying|inbox|e-?mails?|websites?|web ?pages?|documents?|letters?|"
     r"newspapers?|headlines?|signs?|signage|posters?|captions?|pop-?ups?|notifications?|messages?|chats?|"
     r"comment (?:box|section)|interfaces?|dashboards?|spreadsheets?|texts?|logos?|menus?|notices?|pages?|"
-    r"browser windows?|labels?|receipts?|tickets?|flyers?|leaflets?|brochures?|books?|printed|handwritten|writing|"
-    r"words?|typed|typing on)\b", re.I)
+    r"browser windows?|labels?|receipts?|tickets?|flyers?|leaflets?|brochures?|printed|handwritten|writing|"
+    r"words?|typed)\b", re.I)
 # "..., no text, no logos" is the shot note asking for the opposite: not a text subject
-NO_TEXT = re.compile(r"\b(?:no|without|free of)\s+(?:any\s+)?(?:text|logos?|signs?|letters?|writing|captions?)"
-                     r"(?:\s*(?:,|or|and)\s*(?:no\s+)?(?:text|logos?|signs?|letters?|writing|captions?))*", re.I)
+_WRITTEN = r"(?:visible\s+|readable\s+|legible\s+)?(?:text|logos?|signs?|letters?|writing|words?|captions?|watermarks?)"
+NO_TEXT = re.compile(rf"\b(?:no|without|free of|zero)\s+(?:any\s+)?{_WRITTEN}"
+                     rf"(?:\s*(?:,|or|and)\s*(?:no\s+)?{_WRITTEN})*|\btext[- ]?free\b", re.I)
 MIN_VISION = 5     # the prompt calls 5 "generic but acceptable"; 6 made most scenes search every round (~21 s each)
 MIN_FALLBACK = 3   # a loose match still beats a placeholder; below this it doesn't
 VISION_CALLS_PER_KIND = 2   # judge calls per scene for videos, and again for images
@@ -283,7 +284,9 @@ class Selector:
         if self.defer_ai:
             self.deferred.setdefault(scene.id, (scene, video))   # the first request (video before image) wins
             return None
-        out = self.visuals_dir / f"scene_{scene.id:03d}"
+        # its own name: scene_NNN.<ext> may be the stock fallback, hardlinked into the shared download cache —
+        # writing through it would put the drawing in the cache under a stock credit (review finding)
+        out = self.visuals_dir / f"scene_{scene.id:03d}_ai"
         try:
             path = self.ai.video(prompt, out) if video else self.ai.image(prompt, out)
         except Exception as e:  # ComfyUI errors, missing models, OOM → fall through the chain

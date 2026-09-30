@@ -38,11 +38,10 @@ PUNCH = 0.04                          # zoom at the top of the punch...
 PUNCH_ATTACK, PUNCH_RELEASE = 0.1, 0.4  # ...reached in 0.1 s, eased back over 0.4 s
 
 
-def punch_times(cues: list, cuts: list[float]) -> list[float]:
-    """Impacts that don't land on a scene change (those get zoomin/fadeblack there, transitions.py)."""
-    from vidgen.assemble.transitions import CUE_WINDOW
-
-    return [c.time for c in cues if c.kind == "impact" and all(abs(c.time - cut) > CUE_WINDOW for cut in cuts)]
+def punch_times(cues: list, used: set[float]) -> list[float]:
+    """Impacts no transition answered (transitions.used_impacts): mid-shot ones, and those on a cut that went to
+    an evidence card's slide."""
+    return [c.time for c in cues if c.kind == "impact" and c.time not in used]
 
 
 def punch_filter(times: list[float], p: FormatPreset) -> str:
@@ -119,13 +118,10 @@ def render_video(script: Script, timeline: Timeline, assets: list[Asset], preset
                  out_dir: Path, seed: str, sfx_density: str | None = "subtle", look: str | None = None) -> Path:
     """sfx_density: a sfx.DENSITY preset, or None for no sound effects."""
     # sound first: each scene change's transition follows the cue planned there (assemble/transitions.py)
-    scene_cuts: list[float] = []
-
     def plan_sound(cuts: list[float]) -> list:
-        scene_cuts[:] = cuts
         return sound.detect_cues(script, timeline, cuts, sfx_density, seed) if sfx_density else []
 
-    segments, cues = render_segments(assets, timeline, preset, out_dir, script.format, cues_for=plan_sound,
+    segments, cues, answered = render_segments(assets, timeline, preset, out_dir, script.format, cues_for=plan_sound,
                                      look=look or script.look)
     (out_dir / "segments" / "list.txt").write_text(
         "".join(f"file '{p.name}'\n" for p in segments), encoding="utf-8")
@@ -152,7 +148,7 @@ def render_video(script: Script, timeline: Timeline, assets: list[Asset], preset
     try:
         ffmpeg.run(final_args(timeline.duration, music, start, gain,
                               Path(sfx_track.name) if sfx_track else None, out=PART_FILE,
-                              video_filter=punch_filter(punch_times(cues, scene_cuts), preset)), cwd=out_dir)
+                              video_filter=punch_filter(punch_times(cues, answered), preset)), cwd=out_dir)
         write_atomic(out_dir / MUSIC_FILE, json.dumps(
             {"track": music.name if music else "", "credit": track_credit(music) if music else ""},
             ensure_ascii=False))
