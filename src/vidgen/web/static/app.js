@@ -344,6 +344,9 @@ function lengthBar(totalWords) {
     </div>`;
 }
 
+let lookCtx = { look: "neutral", looks: ["neutral"] };
+const LOOK_LABEL = { neutral: "Tự nhiên", dark_mystery: "Bí ẩn tối", cyber_tech: "Công nghệ (teal/cam)",
+                     vintage_archive: "Tư liệu xưa" };
 let llmCtx = {};  // which models wrote the brief/script (state.json "llm")
 function modelBadge(u) {
   return u?.models?.length ? `<span class="model-badge ${u.fallback ? "fallback" : ""}" title="Model đã viết phần này">✍️ ${esc(u.models.map(modelName).join(" + "))}</span>` : "";
@@ -387,6 +390,7 @@ async function renderDetail(slug, { keepDraft = false } = {}) {
               issues: new Map((v.factcheck?.issues || []).map((x) => [x.narration, x.note])) };
   clipCtx = { slug, bySceneId: new Map((v.assets || []).map((a) => [a.scene_id, a])) };
   llmCtx = v.llm || {};
+  lookCtx = { look: v.look || "neutral", looks: v.looks || ["neutral"], slug };
   const fellBack = v.script ? llmCtx.script?.fallback : llmCtx.brief?.fallback;
   const needsRerender = v.status === "review" && v.assets && v.metadata && !v.has_video;
   const showBrief = !!v.brief && !active && (!v.script || briefMode === slug);
@@ -581,7 +585,9 @@ function renderScenes(lang, active, job) {
   let lastChapter = null;
   box.innerHTML = `
     <div class="scenes-head">
-      <div class="stats"><span><b>${draft.scenes.length}</b> cảnh</span><span><b id="total-words">${total}</b> từ</span>${modelBadge(llmCtx.script)}</div>
+      <div class="stats"><span><b>${draft.scenes.length}</b> cảnh</span><span><b id="total-words">${total}</b> từ</span>${modelBadge(llmCtx.script)}
+        <label class="look-pick" title="Bộ màu cho cả video — chỉ cần render lại, không đổi giọng đọc">🎨
+          <select id="look">${lookCtx.looks.map((l) => `<option value="${esc(l)}" ${l === lookCtx.look ? "selected" : ""}>${esc(LOOK_LABEL[l] || l)}</option>`).join("")}</select></label></div>
       <span class="dirty" id="dirty" ${dirty ? "" : "hidden"}>● Chưa lưu</span>
     </div>
     ${lengthBar(total)}
@@ -732,8 +738,17 @@ function wireDetail(slug, v) {
       card.querySelector(".scene-info").textContent = `${w} từ · ≈ ${(w / lengthCtx.wps).toFixed(1)}s`;
     }
   });
-  box.addEventListener("change", (ev) => {
+  box.addEventListener("change", async (ev) => {
     if (ev.target.dataset.f === "visual_type") renderScenes(lang, false, v.job);
+    if (ev.target.id === "look") {  // a render setting, not a script edit: no re-voicing
+      const look = ev.target.value;
+      try {
+        await api(`/api/videos/${slug}/look`, { method: "POST", body: { look } });
+        lookCtx.look = look;
+        toast(v.has_video ? "Đã đổi bộ màu — bấm Render lại để áp dụng (~1 phút, giữ nguyên giọng đọc)"
+                          : "Đã đổi bộ màu cho lần render tới");
+      } catch (e) { toast(e.message, "error"); ev.target.value = lookCtx.look; }
+    }
   });
   box.addEventListener("click", (ev) => {
     const btn = ev.target.closest("button");

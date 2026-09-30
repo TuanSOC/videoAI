@@ -600,3 +600,18 @@ def test_enhance_topics_endpoint(env, monkeypatch):
     monkeypatch.setattr(pipeline, "enhance_topics", down)
     r = client.post("/api/topics/enhance", json={"text": "wannacry", "lang": "vi", "format": "short"})
     assert r.status_code == 502 and "All LLM providers failed" in r.json()["detail"]
+
+
+def test_changing_the_look_is_a_render_setting_not_a_script_edit(env):
+    from vidgen import pipeline
+    client, jobs, _, s = env
+    slug = create(client, jobs)
+    d = s.pipeline.output_dir / slug
+    before = (d / "script.json").read_bytes()
+    v = client.get(f"/api/videos/{slug}").json()
+    assert v["look"] == "neutral" and "cyber_tech" in v["looks"]
+    r = client.post(f"/api/videos/{slug}/look", json={"look": "cyber_tech"})
+    assert r.status_code == 200 and r.json()["look"] == "cyber_tech"
+    assert pipeline.load_state(d)["look"] == "cyber_tech" and (d / "script.json").read_bytes() == before
+    assert client.get(f"/api/videos/{slug}").json()["look"] == "cyber_tech"
+    assert client.post(f"/api/videos/{slug}/look", json={"look": "teal"}).status_code == 422

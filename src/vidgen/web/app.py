@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from vidgen import pipeline
+from vidgen.assemble.looks import LOOKS
 from vidgen.config import SECRET_KEYS, Settings, get_settings, update_env_file
 from vidgen.fsutil import write_atomic
 from vidgen.models import Asset, Script
@@ -48,6 +49,18 @@ class Ideas(BaseModel):
     format: Literal["short", "long"] = "short"
     lang: Literal["vi", "en"] = "vi"
     auto_render: bool = False
+
+
+class LookRequest(BaseModel):
+    look: str
+
+    @field_validator("look")
+    @classmethod
+    def _known(cls, v: str) -> str:
+        from vidgen.assemble.looks import LOOKS
+        if v not in LOOKS:
+            raise ValueError(f"look must be one of {', '.join(LOOKS)}")
+        return v
 
 
 class EnhanceRequest(BaseModel):
@@ -330,7 +343,10 @@ def create_app(settings: Callable[[], Settings] = get_settings,
             "factcheck": current_factcheck(d, script),
             "metadata": json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else None,
             "timings": pipeline.load_state(d).get("timings", {}),
-            "llm": pipeline.load_state(d).get("llm", {}),   # which model wrote the brief/script; fallback?
+            "llm": pipeline.load_state(d).get("llm", {}),
+            # colour look: a render setting kept in state.json (changing it must not re-voice the script)
+            "look": pipeline.load_state(d).get("look") or (script.look if script else "neutral"),
+            "looks": list(LOOKS),   # which model wrote the brief/script; fallback?
             "job": job.to_dict() if job else None,
             "artifacts": {st.name: (d / st.artifact).exists() for st in pipeline.STAGES},
             # per-scene clips, only while they still match the script (after an edit they'll be re-picked)
@@ -448,6 +464,16 @@ def create_app(settings: Callable[[], Settings] = get_settings,
         with exclusive(slug):
             write_atomic(d / "script.json", script.model_dump_json(indent=2))
         return {"ok": True, "scenes": len(script.scenes)}
+
+    @app.post("/api/videos/{slug}/look")
+    def set_look(slug: str, req: LookRequest) -> dict:
+        """Colour look for the next render (state.json, like a series' pinned look); the script is untouched."""
+        d = video_dir(slug)
+        with exclusive(slug):
+            state = pipeline.load_state(d)
+            state["look"] = req.look
+            pipeline.save_state(d, state)
+        return {"look": req.look}
 
     @app.post("/api/videos/{slug}/render")
     def render(slug: str, req: RenderRequest) -> dict:
